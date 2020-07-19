@@ -1,0 +1,321 @@
+
+:root {
+    --transition-time: 0.2s;
+}
+
+.light{
+    --backgrnd-color1: rgb(255,255,255);
+    --backgrnd-color1-hover: rgb(245,245,245);
+    --backgrnd-color2: rgb(225,225,225);
+    --backgrnd-color2-hover: rgb(215,215,215);
+    --backgrnd-color3: rgb(195,195,195);
+    --backgrnd-color3-hover: rgb(185,185,185);
+    --backgrnd-color4: rgb(165,165,165);
+    --backgrnd-color4-hover: rgb(155,155,155);
+    --backgrnd-color5: rgb(135,135,135);
+    --backgrnd-color5-hover: rgb(125,125,125);
+    --border-highlight-level1: #777;
+    --border-highlight-level2: #999;
+    --border-highlight-level3: #bbb;
+    --font-color: #000;
+    --font-color2: #222;
+    --font-color3: #666;
+    --error-font-color: #c00;
+    --icon-invert: invert(0);
+    --icon-brightness: brightness(100%);
+    --icon-highlighted: invert(1) brightness(40%);
+}
+
+.dark{
+    --backgrnd-color1: rgb(30,30,30);
+    --backgrnd-color1-hover: rgb(35,35,35);
+    --backgrnd-color2: rgb(40,40,40);
+    --backgrnd-color2-hover: rgb(45,45,45);
+    --backgrnd-color3: rgb(50,50,50);
+    --backgrnd-color3-hover: rgb(55,55,55);
+    --backgrnd-color4: rgb(60,60,60);
+    --backgrnd-color4-hover: rgb(65,65,65);
+    --backgrnd-color5: rgb(70,70,70);
+    --backgrnd-color5-hover: rgb(75,75,75);
+    --border-highlight-level1: #777;
+    --border-highlight-level2: #555;
+    --border-highlight-level3: #333;
+    --font-color: #ccc;
+    --font-color2: #aaa;
+    --font-color3: #777;
+    --error-font-color: #f66;
+    --icon-invert: invert(1);
+    --icon-brightness: brightness(70%);
+    --icon-highlighted: invert(1);
+}
+
+body{
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    font-family: Open Sans;
+    font-size: 10.5pt;
+    color: var(--font-color);
+    background-color: var(--backgrnd-color1);
+}
+
+.non_selectable{
+    -webkit-touch-callout: none; /* iOS Safari */
+    -webkit-user-select: none; /* Safari */
+    -khtml-user-select: none; /* Konqueror HTML */
+    -moz-user-select: none; /* Old versions of Firefox */
+    -ms-user-select: none; /* Internet Explorer/Edge */
+    user-select: none;
+}
+
+button{
+    background-color: transparent;
+    color: inherit;
+}
+
+button:hover{
+    border-color: #999;
+}
+
+input, select, textarea{
+    background-color: transparent;
+    color: inherit;
+    border: 1px solid var(--border-highlight-level1);
+}
+
+input[type=number]{
+    width: 50px;
+}
+
+input[type=range]{
+    vertical-align: middle;
+}
+
+option{
+    background-color: var(--backgrnd-color1);
+}
+
+a{
+    color: inherit;
+}
+
+.icon{
+    filter: var(--icon-invert) var(--icon-brightness);
+    width: 20px;
+    vertical-align: middle;
+}
+
+.edit_icon, .delete_icon, .draggable_icon {
+    float: right;
+    margin: 0;
+    margin-left: 10px;
+    opacity: 0.5;
+    top: 2px;
+    position: relative;
+    cursor: pointer;
+}
+
+.draggable_icon{
+    cursor: move!important;
+}
+
+.map_icon{
+    cursor: pointer;
+}
+
+#loading_overlay, #popup_overlay{
+    display: none;
+    z-index: 50;
+    position: fixed;
+    width: 100%;
+    height: 100%;
+}
+
+#popup_overlay{
+    background-color: rgba(0,0,0,0.7);
+}
+
+#loading_overlay{
+    filter: invert(1);
+}
+
+#loading{
+    position: relative;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%,-50%);
+    height: 50vh;
+    max-width: 80vw;
+    filter: var(--icon-invert);
+}
+
+#popup{
+    position: fixed;
+    display: none;
+    z-index: 51;
+    width: 90vw;
+    height: 90vh;
+    top: 5vh;
+    left: 5vw;
+}
+
+#popup>img{
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.blurred{
+    filter: blur(2px);
+}
+
+#main{
+    position: absolute;
+    display: grid;
+    grid-template-rows: auto auto auto 1fr;
+    height: 100%;
+    width: 100%;
+}
+
+#primary_menu, #secondary_menu, #tertiary_menu{
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: initial;
+    cursor: default;
+    overflow: auto;
+    white-space: nowrap;
+}
+
+#primary_menu{
+    background-color: var(--backgrnd-color4);
+}
+
+#secondary_menu{
+    background-color: var(--backgrnd-color3);
+}
+
+#tertiary_menu{
+    background-color: var(--backgrnd-color2);
+}
+
+#primary_menu>div, #secondary_menu>div, #tertiary_menu>div{
+    padding: 3px 10px;
+    display: inline-block;
+    border-right: 1px solid var(--border-highlight-level2);
+    transition: var(--transition-time);
+}
+
+#primary_menu>div:hover{
+    background-color: var(--backgrnd-color4-hover);
+}
+
+#secondary_menu>div:hover{
+    background-color: var(--backgrnd-color3-hover);
+}
+
+#tertiary_menu>div:hover{
+    background-color: var(--backgrnd-color2-hover)
+}
+
+.primary_menu_active{
+    background-color: var(--backgrnd-color5);
+}
+
+.secondary_menu_active{
+    background-color: var(--backgrnd-color4);
+}
+
+.tertiary_menu_active{
+    background-color: var(--backgrnd-color3);
+}
+
+#main_content{
+    overflow: auto;
+    padding: 10px;
+    padding-top: 20px;
+}
+
+.content_section {
+    min-height: 20px;
+    position: relative;
+    background-color: var(--backgrnd-color3);
+    padding: 15px;
+    margin-bottom: 10px;
+    overflow: auto;
+}
+
+.content_section > h2, .content_section > h3 {
+    margin: 0;
+    cursor: default;
+}
+
+.content_image{
+    height: 200px;
+}
+
+.category_head{
+    background-color: var(--backgrnd-color2)!important;
+}
+
+.category_body{
+    margin-left: 10px;
+}
+
+.first_content_image{
+    float:left;
+    width: 50%;
+    max-width: 500px;
+    height: auto;
+    margin-right: 10px;
+    margin-bottom: 10px;
+}
+
+.content_gallery{
+    overflow: auto;
+    white-space: nowrap;
+    width: 100%;
+}
+
+.content_text{
+    margin-bottom: 10px;
+}
+
+.content_text::after{
+    content: "";
+    display: block;
+    clear: both;
+}
+
+.content_grid{
+    min-width: 200px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    border-top: 1px solid;
+    border-left: 1px solid;
+}
+
+.content_grid>div{
+    padding: 10px;
+    border-bottom: 1px solid;
+    border-right: 1px solid;
+}
+
+.content_grid textarea{
+    width: 100%;
+}
+
+.content_section>h2 input, .content_section>h3 input{
+    width: calc(100% - 65px);
+    vertical-align: 2.5px;
+}
+
+.fold_arrow{
+    width: 23px;
+    display: inline-block;
+}
+
+.save_edit_button, .cancel_edit_button{
+    float: right;
+    display: none;
+    margin-left: 10px;
+}
