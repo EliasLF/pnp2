@@ -198,18 +198,22 @@ a{
     background-color: var(--backgrnd-color2);
 }
 
-#primary_menu>div, #secondary_menu>div, #tertiary_menu>div{
+#primary_menu>div, .secondary_menu_tab, #tertiary_menu>div{
     padding: 3px 10px;
     display: inline-block;
     border-right: 1px solid var(--border-highlight-level2);
     transition: var(--transition-time);
 }
 
-#primary_menu>div:hover{
+#secondary_menu div{
+    display: inline-block;
+}
+
+#primary_menu_tab>div:hover{
     background-color: var(--backgrnd-color4-hover);
 }
 
-#secondary_menu>div:hover{
+.secondary_menu_tab:hover{
     background-color: var(--backgrnd-color3-hover);
 }
 
@@ -255,10 +259,6 @@ a{
 
 .category_head{
     background-color: var(--backgrnd-color2)!important;
-}
-
-.category_body{
-    margin-left: 10px;
 }
 
 .first_content_image{
@@ -318,4 +318,10 @@ a{
     float: right;
     display: none;
     margin-left: 10px;
+}
+
+.draggable-mirror{
+    z-index: 100;
+    opacity: 0.8;
+    transition: 0s!important;
 }

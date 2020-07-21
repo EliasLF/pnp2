@@ -42,6 +42,22 @@ String.prototype.decodeHTML = function(){
 Object.defineProperty(String.prototype, "encodeHTML", {enumerable: false});
 Object.defineProperty(String.prototype, "decodeHTML", {enumerable: false});
 
+var stylesheet;
+for(let x of document.styleSheets) if(x.title == 'procedural_stylesheet'){
+    stylesheet = x;
+    break;
+}
+var styleRules = {};
+function addStyleRule(name, text){
+    let i = stylesheet.insertRule(text);
+    styleRules[name] = stylesheet.rules[i];
+}
+
+addStyleRule('entityContainer','.entity_container{}');
+addStyleRule('categoryContainer','.category_container{}');
+addStyleRule('categoryBody','.category_body{margin-left: 15px;}'); // TODO: read actual value from localStorage
+
+
 var loadPromises = {};
 for(let property of ['socket', 'body']){
     loadPromises[property] = {};
@@ -138,7 +154,79 @@ class Storyline {
         this.dom.generalInfo = htmlHelper.createNode('div');
 
         this.dom.menuTabs = {};
-        this.dom.menuTabs.general = htmlHelper.createNode('div',{innerHTML:'General',onclick: ()=>this.openTab('general')});
+        this.dom.menuTabs.general = htmlHelper.createNode('div',{className:'secondary_menu_tab',innerHTML:'General',onclick: ()=>this.openTab('general')});
+        this.dom.menuTabs.players = htmlHelper.createNode('div');
+        this.dom.menuTabs.storlineInfoTypes = htmlHelper.createNode('div');
+
+        this.sortables = {};
+        this.sortables.storlineInfoTypes = new Sortable.default([this.dom.menuTabs.storlineInfoTypes], {
+            draggable: ".secondary_menu_tab",
+            delay: 200,
+            mirror: {
+              constrainDimensions: true,
+              yAxis: false
+            }
+        });
+        this.sortables.players = new Sortable.default([this.dom.menuTabs.players], {
+            draggable: ".secondary_menu_tab",
+            delay: 200,
+            mirror: {
+              constrainDimensions: true,
+              yAxis: false
+            }
+        });
+        this.sortables.generalInfo = new Sortable.default([this.dom.generalInfo], {
+            draggable: ".entity",
+            handle: '.drag_handle_entity',
+            mirror: {
+              constrainDimensions: true
+            }
+        });
+
+        this.sortables.storlineInfoTypes.on('sortable:start', e => {
+            this.setEditing(true);
+        });
+        this.sortables.storlineInfoTypes.on('sortable:stop', e => {
+            if(e.data.newIndex != e.data.oldIndex){
+                let children = this.info.types.slice();
+                
+                let typeId = children.splice(e.data.oldIndex,1)[0];
+                children.splice(e.data.newIndex,0,typeId);
+
+                socket.emit('updateData','Storyline',this.id,{info:{types:children}});
+            }
+            this.setEditing(false);
+        });
+
+        this.sortables.players.on('sortable:start', e => {
+            this.setEditing(true);
+        });
+        this.sortables.players.on('sortable:stop', e => {
+            if(e.data.newIndex != e.data.oldIndex){
+                let children = this.players.entities.slice();
+                
+                let playerId = children.splice(e.data.oldIndex,1)[0];
+                children.splice(e.data.newIndex,0,playerId);
+
+                socket.emit('updateData','Storyline',this.id,{players:{entities:children}});
+            }
+            this.setEditing(false);
+        });
+
+        this.sortables.generalInfo.on('sortable:start', e => {
+            this.setEditing(true);
+        });
+        this.sortables.generalInfo.on('sortable:stop', e => {
+            if(e.data.newIndex != e.data.oldIndex){
+                let children = this.info.general.slice();
+                
+                let infoId = children.splice(e.data.oldIndex,1)[0];
+                children.splice(e.data.newIndex,0,infoId);
+
+                socket.emit('updateData','Storyline',this.id,{info:{general:children}});
+            }
+            this.setEditing(false);
+        });
 
         objectSets.Storyline.set(this.id, this);
     }
@@ -192,12 +280,13 @@ class Storyline {
             this.dom.generalInfo.innerHTML = '';
             for(let x of this.getGeneralInfo()) this.dom.generalInfo.appendChild(x.dom.root);
         }
-        // TODO: update respective DOM
         if(data.info?.types && !this.info?.types?.equals(data.info.types)){
             this.info.types = data.info.types;
             for(let id of this.info.types){
                 if(!objectSets.StorylineInfoType.get(id)) newObjectInits.push((new StorylineInfoType(id, this)).init());
             }
+            this.dom.menuTabs.storlineInfoTypes.innerHTML = '';
+            for(let type of this.getStorylineInfoTypes()) this.dom.menuTabs.storlineInfoTypes.appendChild(type.dom.menuTab);
         }
         
         if(data.players?.entities && !this.players?.entities?.equals(data.players.entities)){
@@ -206,6 +295,8 @@ class Storyline {
             for(let id of this.players.entities){
                 if(!objectSets.PlayerEntity.get(id)) newObjectInits.push((new PlayerEntity(id, this)).init());
             }
+            this.dom.menuTabs.players.innerHTML = '';
+            for(let player of this.getPlayerEntities()) this.dom.menuTabs.players.appendChild(player.dom.menuTab);
         }
         
         if(data.board?.environments && !this.board?.environments?.equals(data.board.environments)){
@@ -254,7 +345,7 @@ class Storyline {
 
             document.getElementById('secondary_menu').innerHTML = '';
             document.getElementById('secondary_menu').appendChild(this.dom.menuTabs.general);
-            for(let type of this.getStorylineInfoTypes()) document.getElementById('secondary_menu').appendChild(type.dom.menuTab);
+            document.getElementById('secondary_menu').appendChild(this.dom.menuTabs.storlineInfoTypes);
             document.getElementById('secondary_menu').style.display = '';
 
             document.getElementById('tertiary_menu').style.display = 'none';
@@ -287,7 +378,7 @@ class Storyline {
             document.getElementById('menu_players').classList?.add('primary_menu_active');
 
             document.getElementById('secondary_menu').innerHTML = '';
-            for(let player of this.getPlayerEntities()) document.getElementById('secondary_menu').appendChild(player.dom.menuTab);
+            document.getElementById('secondary_menu').appendChild(this.dom.menuTabs.players);
             document.getElementById('secondary_menu').style.display = '';
             document.getElementById('tertiary_menu').style.display = 'none';
 
@@ -309,6 +400,7 @@ class Entity { // abstract
         this.storyline = storyline;
         this.open = false;
         this.editing = false;
+        this.type = this.constructor;
         
         this.deleteMessages = [
             'This will delete this element and remove all references to it in other elements. Are your sure you want to continue?',
@@ -316,13 +408,15 @@ class Entity { // abstract
         ];
 
         this.dom = {};
-        this.dom.root = htmlHelper.createNode('div', {className: 'content_section'});
+        this.dom.root = htmlHelper.createNode('div', {className: 'content_section entity',id:this.type.name+'_'+this.id});
         this.dom.input = {};
         this.dom.input.cancelEdit = htmlHelper.createNode('button',{className:'cancel_edit_button', innerHTML:'Cancel', onclick:()=>this.cancelEdit()});
         this.dom.input.saveEdit = htmlHelper.createNode('button',{className:'save_edit_button', innerHTML:'Save', onclick:()=>this.saveEdit()});
 
         this.dom.icons = {};
-        this.dom.icons.draggable = this.dom.root.appendChild(htmlHelper.createNode('img', {className: 'icon draggable_icon', src:'icons/draggable.svg'}));
+        this.dom.icons.draggable = this.dom.root.appendChild(htmlHelper.createNode('img', {className: 'icon draggable_icon drag_handle_entity', src:'icons/draggable.svg', onmousedown:()=>{
+            this.toggleOpen(false);
+        }}));
         this.dom.icons.edit = this.dom.root.appendChild(htmlHelper.createNode('img', {className: 'icon edit_icon', src:'icons/pencil-2.png', onclick: ()=>this.edit()}));
         this.dom.icons.delete = this.dom.root.appendChild(htmlHelper.createNode('img', {className: 'icon delete_icon', src:'icons/bin-2.png', onclick: ()=>this.delete()}, {display:'none'}));
 
@@ -348,7 +442,8 @@ class Entity { // abstract
         this.dom.root.appendChild(this.dom.input.cancelEdit);
     }
 
-    toggleOpen(){
+    toggleOpen(setValue){
+        if(setValue == this.open) return;
         this.open = !this.open;
         this.dom.foldArrow.innerHTML = this.open ? String.fromCharCode(9660) : String.fromCharCode(9654);
         this.dom.main.style.display = this.open ? '' : 'none';
@@ -430,7 +525,7 @@ class Entity { // abstract
     }
 
     reloadDOMVisibility(){
-        this.dom.icons.draggable.style.display = '';
+        if(this.type.name != 'PlayerEntity') this.dom.icons.draggable.style.display = '';
         this.dom.icons.edit.style.display = '';
         this.dom.icons.delete.style.display = 'none';
 
@@ -453,7 +548,8 @@ class Entity { // abstract
         }
 
         // if only description and nothing else display pureText instead of grid format
-        if(this.description && this.dom.firstImage.style.display == 'none' && this.dom.gallery.style.display == 'none' && Array.from(this.dom.grid.children).slice(2).every(x => x.style.display == 'none')){
+        if(this.dom.firstImage.style.display == 'none' && this.dom.gallery.style.display == 'none' && 
+                Array.from(this.dom.grid.children).slice(2).every(x => x.style.display == 'none')){
             this.dom.grid.style.display = 'none';
             this.dom.pureText.style.display = '';
         }
@@ -500,7 +596,7 @@ class Entity { // abstract
 
         // TODO: images, map (coordinates, path)
 
-        if(Object.keys(changed).length) socket.emit('updateData',this.constructor.name,this.id,changed);
+        if(Object.keys(changed).length) socket.emit('updateData',this.type.name,this.id,changed);
     }
 
     cancelEdit(){
@@ -570,7 +666,9 @@ class PlayerEntity extends Entity {
         this.cells = {};
         this.deleteMessages.push('With this also all subelements (items, skills, ...) will be deleted. Do you still want to proceed?');
 
-        this.dom.menuTab = htmlHelper.createNode('div', {onclick: ()=>this.storyline.openPlayer(this.id)});
+        this.dom.icons.draggable.style.display = 'none';
+
+        this.dom.menuTab = htmlHelper.createNode('div', {className:'secondary_menu_tab',onclick: ()=>this.storyline.openPlayer(this.id)});
         this.dom.menuTabs = {};
         this.dom.menuTabs.info = htmlHelper.createNode('div', {innerHTML:'Info', onclick: ()=>this.openTab('info')});
         this.dom.menuTabs.cells = htmlHelper.createNode('div', {innerHTML:'Values', onclick: ()=>this.openTab('cells')});
@@ -580,23 +678,136 @@ class PlayerEntity extends Entity {
 
         this.dom.items = {};
         this.dom.items.root = htmlHelper.createNode('div');
-        this.dom.items.categories = this.dom.items.root.appendChild(htmlHelper.createNode('div'));
-        this.dom.items.entities = this.dom.items.root.appendChild(htmlHelper.createNode('div'));
+        this.dom.items.categories = this.dom.items.root.appendChild(htmlHelper.createNode('div',{
+            id:'PlayerEntity_'+this.id+'_items_categories', 
+            className:'category_container'
+        }));
+        this.dom.items.entities = this.dom.items.root.appendChild(htmlHelper.createNode('div',{
+            id:'PlayerEntity_'+this.id+'_items_entities', 
+            className:'entity_container'
+        }));
 
         this.dom.itemEffects = {};
         this.dom.itemEffects.root = htmlHelper.createNode('div');
-        this.dom.itemEffects.categories = this.dom.itemEffects.root.appendChild(htmlHelper.createNode('div'));
-        this.dom.itemEffects.entities = this.dom.itemEffects.root.appendChild(htmlHelper.createNode('div'));
+        this.dom.itemEffects.categories = this.dom.itemEffects.root.appendChild(htmlHelper.createNode('div',{
+            id:'PlayerEntity_'+this.id+'_itemEffects_categories', 
+            className:'category_container'
+        }));
+        this.dom.itemEffects.entities = this.dom.itemEffects.root.appendChild(htmlHelper.createNode('div',{
+            id:'PlayerEntity_'+this.id+'_itemEffects_entities', 
+            className:'entity_container'
+        }));
 
         this.dom.cells = {};
         this.dom.cells.root = htmlHelper.createNode('div');
-        this.dom.cells.categories = this.dom.cells.root.appendChild(htmlHelper.createNode('div'));
-        this.dom.cells.entities = this.dom.cells.root.appendChild(htmlHelper.createNode('div'));
+        this.dom.cells.categories = this.dom.cells.root.appendChild(htmlHelper.createNode('div',{
+            id:'PlayerEntity_'+this.id+'_cells_categories', 
+            className:'category_container'
+        }));
+        this.dom.cells.entities = this.dom.cells.root.appendChild(htmlHelper.createNode('div',{
+            id:'PlayerEntity_'+this.id+'_cells_entities', 
+            className:'entity_container'
+        }));
 
         this.dom.skills = {};
         this.dom.skills.root = htmlHelper.createNode('div');
-        this.dom.skills.categories = this.dom.skills.root.appendChild(htmlHelper.createNode('div'));
-        this.dom.skills.entities = this.dom.skills.root.appendChild(htmlHelper.createNode('div'));
+        this.dom.skills.categories = this.dom.skills.root.appendChild(htmlHelper.createNode('div',{
+            id:'PlayerEntity_'+this.id+'_skills_categories', 
+            className:'category_container'
+        }));
+        this.dom.skills.entities = this.dom.skills.root.appendChild(htmlHelper.createNode('div',{
+            id:'PlayerEntity_'+this.id+'_skills_entities', 
+            className:'entity_container'
+        }));
+
+        this.sortables = {};
+        this.sortables.entities = new Sortable.default([
+            this.dom.items.entities, this.dom.itemEffects.entities, this.dom.cells.entities, this.dom.skills.entities
+        ], {
+            draggable: ".entity",
+            handle: '.drag_handle_entity',
+            mirror: {
+              constrainDimensions: true
+            }
+        });
+        this.sortables.categories = new Sortable.default([
+            this.dom.items.categories, this.dom.itemEffects.categories, this.dom.cells.categories, this.dom.skills.categories
+        ], {
+            draggable: ".category",
+            handle: '.drag_handle_category',
+            mirror: {
+              constrainDimensions: true
+            }
+        });
+
+
+        function saveNewOrder(e){
+            let oldContainer = {update:{}};
+            let newContainer = {update:{}};
+            let entityId = parseInt(e.data.dragEvent.data.source.id.split('_')[1]);
+
+            [oldContainer.type, oldContainer.id, oldContainer.property, oldContainer.subProperty] = e.data.oldContainer.id.split('_');
+            [newContainer.type, newContainer.id, newContainer.property, newContainer.subProperty] = e.data.newContainer.id.split('_');
+            oldContainer.id = parseInt(oldContainer.id);
+            newContainer.id = parseInt(newContainer.id);
+
+            oldContainer.object = objectSets[oldContainer.type]?.get(oldContainer.id);
+            if(oldContainer.subProperty) oldContainer.children = oldContainer.object?.[oldContainer.property]?.[oldContainer.subProperty].slice();
+            else oldContainer.children = oldContainer.object?.[oldContainer.property]?.slice();
+            newContainer.object = objectSets[newContainer.type]?.get(newContainer.id);
+            if(newContainer.object == oldContainer.object) newContainer.children = oldContainer.children;
+            else if(newContainer.subProperty) newContainer.children = newContainer.object?.[newContainer.property]?.[newContainer.subProperty].slice();
+            else newContainer.children = newContainer.object?.[newContainer.property]?.slice();
+
+            if(!oldContainer.children) return console.error('old container not found',oldContainer,e);
+            if(!newContainer.children) return console.error('new container not found',newContainer,e);
+            
+            oldContainer.children.splice(e.data.oldIndex,1);
+            newContainer.children.splice(e.data.newIndex,0,entityId);
+
+            if(oldContainer.subProperty){
+                oldContainer.update[oldContainer.property] = {};
+                oldContainer.update[oldContainer.property][oldContainer.subProperty] = oldContainer.children;
+            }
+            else oldContainer.update[oldContainer.property] = oldContainer.children;
+            socket.emit('updateData',oldContainer.type,oldContainer.id,oldContainer.update);
+
+            if(newContainer.subProperty){
+                newContainer.update[newContainer.property] = {};
+                newContainer.update[newContainer.property][newContainer.subProperty] = newContainer.children;
+            }
+            else newContainer.update[newContainer.property] = newContainer.children;
+            socket.emit('updateData',newContainer.type,newContainer.id,newContainer.update);
+        }
+
+        this.sortables.entities.on('sortable:start', e => {
+            this.setEditing(true);
+            styleRules.entityContainer.style.minHeight = '20px';
+        });
+        this.sortables.entities.on('sortable:stop', e => {
+            styleRules.entityContainer.style.minHeight = '';
+            if(e.data.newContainer != e.data.oldContainer || e.data.newIndex != e.data.oldIndex){
+                saveNewOrder(e);
+            }
+            this.setEditing(false);
+        });
+
+        this.sortables.categories.on('sortable:start', e => {
+            this.setEditing(true);
+            styleRules.categoryContainer.style.minHeight = '20px';
+        });
+        this.sortables.categories.on('sortable:stop', e => {
+            styleRules.categoryContainer.style.minHeight = '';
+            if(e.data.newContainer != e.data.oldContainer || e.data.newIndex != e.data.oldIndex){
+                saveNewOrder(e);
+            }
+            this.setEditing(false);
+        });
+    }
+
+    registerSortableContainers(entity, category){
+        if(entity) this.sortables.entities.addContainer(entity);
+        if(category) this.sortables.categories.addContainer(category);
     }
 
     async init(){
@@ -987,8 +1198,8 @@ class CellEntity extends Entity {
 
         await super.update(data);
 
-        if(data.type != undefined && this.type != data.type){
-            this.type = data.type;
+        if(data.cellType != undefined && this.cellType != data.cellType){
+            this.cellType = data.cellType;
         }
 
         if(data.value != undefined && this.value != data.value){
@@ -1021,7 +1232,7 @@ class Category {
 
 
         this.dom = {};
-        this.dom.root = htmlHelper.createNode('div');
+        this.dom.root = htmlHelper.createNode('div',{className:'category',id:this.type.name+'_'+this.id});
 
         this.dom.input = {};
         this.dom.input.cancelEdit = htmlHelper.createNode('button',{className:'cancel_edit_button', innerHTML:'Cancel', onclick:()=>this.cancelEdit()});
@@ -1030,7 +1241,9 @@ class Category {
 
         this.dom.head = this.dom.root.appendChild(htmlHelper.createNode('div', {className: 'category_head content_section'}));
         this.dom.icons = {};
-        this.dom.icons.draggable = this.dom.head.appendChild(htmlHelper.createNode('img', {className: 'icon draggable_icon', src:'icons/draggable.svg'}));
+        this.dom.icons.draggable = this.dom.head.appendChild(htmlHelper.createNode('img', {className: 'icon draggable_icon drag_handle_category', src:'icons/draggable.svg', onmousedown: ()=>{
+            this.toggleOpen(false);
+        }}));
         this.dom.icons.edit = this.dom.head.appendChild(htmlHelper.createNode('img', {className: 'icon edit_icon', src:'icons/pencil-2.png', onclick: ()=>this.edit()}));
         this.dom.icons.delete = this.dom.head.appendChild(htmlHelper.createNode('img', {className: 'icon delete_icon', src:'icons/bin-2.png', onclick: ()=>this.delete()}, {display:'none'}));
 
@@ -1039,16 +1252,19 @@ class Category {
         this.dom.name = this.dom.title.appendChild(htmlHelper.createNode('span'));
 
         this.dom.body = this.dom.root.appendChild(htmlHelper.createNode('div', {className: 'category_body'}));
-        this.dom.categories = this.dom.body.appendChild(htmlHelper.createNode('div', {className: 'category_subcategory_section'}));
-        this.dom.entities = this.dom.body.appendChild(htmlHelper.createNode('div', {className: 'category_entity_section'}));
+        this.dom.categories = this.dom.body.appendChild(htmlHelper.createNode('div',{id:this.type.name+'_'+this.id+'_categories',className:'category_container'}));
+        this.dom.entities = this.dom.body.appendChild(htmlHelper.createNode('div',{id:this.type.name+'_'+this.id+'_entities',className:'entity_container'}));
 
         this.dom.head.appendChild(this.dom.input.saveEdit);
         this.dom.head.appendChild(this.dom.input.cancelEdit);
 
         this.toggleOpen();
+
+        this.registerSortableContainers(this.dom.entities, this.dom.categories);
     }
 
-    toggleOpen(){
+    toggleOpen(setValue){
+        if(setValue == this.open) return;
         this.open = !this.open;
         this.dom.foldArrow.innerHTML = this.open ? String.fromCharCode(9660) : String.fromCharCode(9654);
         this.dom.body.style.display = this.open ? '' : 'none';
@@ -1108,6 +1324,10 @@ class Category {
         }
 
         await Promise.all(newObjectInits);
+    }
+
+    registerSortableContainers(entity, category){
+        this.parent.registerSortableContainers(entity, category);
     }
 
     setEditing(value){
@@ -1238,10 +1458,96 @@ class StorylineInfoType {
         this.dom = {};
         this.dom.root = htmlHelper.createNode('div');
 
-        this.dom.menuTab = htmlHelper.createNode('div', {onclick: ()=>this.storyline.openTab(this.id)});
+        this.dom.menuTab = htmlHelper.createNode('div', {className:'secondary_menu_tab',onclick: ()=>this.storyline.openTab(this.id)});
 
-        this.dom.categories = this.dom.root.appendChild(htmlHelper.createNode('div'));
-        this.dom.entities = this.dom.root.appendChild(htmlHelper.createNode('div'));
+        this.dom.categories = this.dom.root.appendChild(htmlHelper.createNode('div',{
+            id:'StorylineInfoType_'+this.id+'_categories', 
+            className:'category_container'
+        }));
+        this.dom.entities = this.dom.root.appendChild(htmlHelper.createNode('div',{
+            id:'StorylineInfoType_'+this.id+'_entities', 
+            className:'entity_container'
+        }));
+
+        this.sortables = {};
+        this.sortables.entities = new Sortable.default([this.dom.entities], {
+            draggable: ".entity",
+            handle: '.drag_handle_entity',
+            mirror: {
+              constrainDimensions: true
+            }
+        });
+        this.sortables.categories = new Sortable.default([this.dom.categories], {
+            draggable: ".category",
+            handle: '.drag_handle_category',
+            mirror: {
+              constrainDimensions: true
+            }
+        });
+
+
+        function saveNewOrder(e){
+            let oldContainer = {update:{}};
+            let newContainer = {update:{}};
+            let entityId = parseInt(e.data.dragEvent.data.source.id.split('_')[1]);
+
+            [oldContainer.type, oldContainer.id, oldContainer.property, oldContainer.subProperty] = e.data.oldContainer.id.split('_');
+            [newContainer.type, newContainer.id, newContainer.property, newContainer.subProperty] = e.data.newContainer.id.split('_');
+            oldContainer.id = parseInt(oldContainer.id);
+            newContainer.id = parseInt(newContainer.id);
+
+            oldContainer.object = objectSets[oldContainer.type]?.get(oldContainer.id);
+            if(oldContainer.subProperty) oldContainer.children = oldContainer.object?.[oldContainer.property]?.[oldContainer.subProperty].slice();
+            else oldContainer.children = oldContainer.object?.[oldContainer.property]?.slice();
+            newContainer.object = objectSets[newContainer.type]?.get(newContainer.id);
+            if(newContainer.object == oldContainer.object) newContainer.children = oldContainer.children;
+            else if(newContainer.subProperty) newContainer.children = newContainer.object?.[newContainer.property]?.[newContainer.subProperty].slice();
+            else newContainer.children = newContainer.object?.[newContainer.property]?.slice();
+
+            if(!oldContainer.children) return console.error('old container not found',oldContainer,e);
+            if(!newContainer.children) return console.error('new container not found',newContainer,e);
+            
+            oldContainer.children.splice(e.data.oldIndex,1);
+            newContainer.children.splice(e.data.newIndex,0,entityId);
+
+            if(oldContainer.subProperty){
+                oldContainer.update[oldContainer.property] = {};
+                oldContainer.update[oldContainer.property][oldContainer.subProperty] = oldContainer.children;
+            }
+            else oldContainer.update[oldContainer.property] = oldContainer.children;
+            socket.emit('updateData',oldContainer.type,oldContainer.id,oldContainer.update);
+
+            if(newContainer.subProperty){
+                newContainer.update[newContainer.property] = {};
+                newContainer.update[newContainer.property][newContainer.subProperty] = newContainer.children;
+            }
+            else newContainer.update[newContainer.property] = newContainer.children;
+            socket.emit('updateData',newContainer.type,newContainer.id,newContainer.update);
+        }
+
+        this.sortables.entities.on('sortable:start', e => {
+            this.setEditing(true);
+            styleRules.entityContainer.style.minHeight = '20px';
+        });
+        this.sortables.entities.on('sortable:stop', e => {
+            styleRules.entityContainer.style.minHeight = '';
+            if(e.data.newContainer != e.data.oldContainer || e.data.newIndex != e.data.oldIndex){
+                saveNewOrder(e);
+            }
+            this.setEditing(false);
+        });
+
+        this.sortables.categories.on('sortable:start', e => {
+            this.setEditing(true);
+            styleRules.categoryContainer.style.minHeight = '20px';
+        });
+        this.sortables.categories.on('sortable:stop', e => {
+            styleRules.categoryContainer.style.minHeight = '';
+            if(e.data.newContainer != e.data.oldContainer || e.data.newIndex != e.data.oldIndex){
+                saveNewOrder(e);
+            }
+            this.setEditing(false);
+        });
 
         objectSets.StorylineInfoType.set(this.id, this);
     }
@@ -1302,6 +1608,11 @@ class StorylineInfoType {
         await Promise.all(newObjectInits);
     }
 
+    registerSortableContainers(entity, category){
+        if(entity) this.sortables.entities.addContainer(entity);
+        if(category) this.sortables.categories.addContainer(category);
+    }
+
     setEditing(value){
         this.editing = value;
         if(!value && this.updateDataCash) this.update();
@@ -1347,8 +1658,6 @@ class BoardEntity {
     document.getElementById('menu_storyline').onclick = () => currentStoryline.openTab();
     document.getElementById('menu_players').onclick = () => currentStoryline.openPlayer();
 })();
-
-
 
 /* TODO/NOTES:
 - good markup parser

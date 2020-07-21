@@ -21,6 +21,7 @@ const io = require('socket.io')(8081);
 const Discord = require('discord.js');
 const ytdl = require('ytdl-core');
 const fetch = require('node-fetch');
+const { Cipher } = require('crypto');
 const mailTransport = require('nodemailer').createTransport({
     host: 'mail.foramitti.com', // TODO: change to localhost (check if still works)
     port: 587,
@@ -1093,7 +1094,46 @@ io.on('connection', (socket) => {
                 }
                 break;
             
-            case 'Storyline': return error('Storylines cannot be added client-side. You should not have been able to call this command.');
+            case 'Storyline':
+                if(data.info?.types != undefined){
+                    if(!tmpData.info) tmpData.info = {};
+                    tmpData.info.types = data.info.types;
+                    if(!Array.isArray(tmpData.info.types) || tmpData.info.types.some(x => typeof x != 'number')) 
+                        return error('info.types must be an array of numerical ids');
+                }
+                if(data.info?.general != undefined){
+                    if(!tmpData.info) tmpData.info = {};
+                    tmpData.info.general = data.info.general;
+                    if(!Array.isArray(tmpData.info.general) || tmpData.info.general.some(x => typeof x != 'number')) 
+                        return error('info.general must be an array of numerical ids');
+                }
+
+                if(data.players?.entities != undefined){
+                    if(!tmpData.players) tmpData.players = {};
+                    tmpData.players.entities = data.players.entities;
+                    if(!Array.isArray(tmpData.players.entities) || tmpData.players.entities.some(x => typeof x != 'number')) 
+                        return error('players.entities must be an array of numerical ids');
+                }
+
+                if(data.board?.entities != undefined){
+                    if(!tmpData.board) tmpData.board = {};
+                    tmpData.board.entities = data.board.entities;
+                    if(!Array.isArray(tmpData.board.entities) || tmpData.board.entities.some(x => typeof x != 'number')) 
+                        return error('board.entities must be an array of numerical ids');
+                }
+                if(data.board?.environments != undefined){
+                    if(!tmpData.board) tmpData.board = {};
+                    tmpData.board.environments = data.board.environments;
+                    if(!Array.isArray(tmpData.board.environments) || tmpData.board.environments.some(x => typeof x != 'number')) 
+                        return error('board.environments must be an array of numerical ids');
+                }
+                if(data.board?.activeEnvironment != undefined){
+                    if(!tmpData.board) tmpData.board = {};
+                    tmpData.board.activeEnvironment = data.board.activeEnvironment;
+                    if(typeof tmpData.board.activeEnvironment != 'number') 
+                        return error('board.activeEnvironment must be a numerical id');
+                }
+                break;
         }
 
         if(tmpData.name != undefined){
@@ -1145,7 +1185,7 @@ io.on('connection', (socket) => {
                 callbacksAfterHalts[collection][id].push(resolve);
             }));
         }
-        await mongodb.collection(collection).updateOne({'_id':id}, {$set: data});
+        await mongodb.collection(collection).updateOne({'_id':id}, {$set: mongoData});
         io.emit('updateData_'+collection+'_'+id, data);
     });
 
@@ -1183,7 +1223,7 @@ io.on('connection', (socket) => {
         // TODO: implement recursive checking (and remove playerId/storylineId)
         if(['ItemEntity','ItemEffectEntity','SkillEntity','CellEntity'].includes(collection)){
             tmpData.reference_name = tmpData.name.decodeHTML().toLowerCase().replace(/ /g,'_');
-            tmpData.player = playerId;
+            tmpData.player = loose ? parentId : playerId;
             if(typeof tmpData.player != 'number') return error('you need to provide a player id for creating this type of entity');
             if(await mongodb.collection(collection).findOne({reference_name: tmpData.reference_name, player: tmpData.player}))
                 return error('there is already an entity of this type with an equivalent name within this player entity, '+
