@@ -39,8 +39,126 @@ String.prototype.encodeHTML = function(){
 String.prototype.decodeHTML = function(){
     return this.replace(/&#x([\dabcdef]+);/gi, (match, numString) => String.fromCharCode(parseInt(numString, 16)));
 }
+String.prototype.undefinedIndexOf = function(pattern, offset){
+    let res = this.indexOf(pattern, offset);
+    return (res < 0) ? undefined : res;
+}
+String.prototype.startsWithCount = function(str){
+	// counts the occurences of the parameter str at the beginning of the String object
+	var c=0;
+	for(let i=0;;i+=str.length){
+		if(this.substring(i,i+str.length) == str) c++;
+		else break;
+	}
+	return c;
+};
 Object.defineProperty(String.prototype, "encodeHTML", {enumerable: false});
 Object.defineProperty(String.prototype, "decodeHTML", {enumerable: false});
+Object.defineProperty(String.prototype, "undefinedIndexOf", {enumerable: false});
+Object.defineProperty(String.prototype, "startsWithCount", {enumerable: false});
+
+function parseMarkup(string){
+    // list:
+    let result = '';
+    let offset = 0;
+    while(offset >= 0 && offset < string.length){
+        let begin = string.indexOf('<list>',offset);
+        if(begin < 0){
+            result += string.slice(offset);
+            break;
+        }
+        result += string.slice(offset, begin);
+        begin += 6;
+        let end = string.undefinedIndexOf('</list>',begin) ?? string.length;
+
+        // split the section into list element parts
+        let section = string.slice(begin,end).split('\n');
+        for(let i=0; i<section.length; i++){
+            if(!section[i].trim().startsWith('-') && i > 0){
+                section[i-1] += '\n' + section[i];
+                section.splice(i,1);
+                i--;
+            }
+        }
+        // add html ul and li tags to get list elements to the respective level
+        let level = 0;
+        for(let i in section){
+            section[i] = section[i].trim();
+            let newLevel = section[i].startsWithCount('-');
+            if(!newLevel) continue;
+
+            if(newLevel > 0) section[i] = '<li>' + section[i].slice(newLevel);
+            while(level < newLevel){
+                section[i] = '<ul>' + section[i];
+                level++;
+            }
+            while(level > newLevel){
+                section[i] = '</ul>' + section[i];
+                level--;
+            }
+            
+            section[i] += '</li>';
+        }
+        let l = section.length - 1;
+        section[l] += '</ul>';
+        level--;
+        while(level > 0){
+            section[l] += '</li></ul>';
+            level--;
+        }
+        result += section.join('');
+        offset = end + 7;
+    }
+    string = result;
+
+    // tab (table with 2 columns):
+    result = '';
+    offset = 0;
+    while(offset >= 0 && offset < string.length){
+        let begin = string.indexOf('<tab>',offset);
+        if(begin < 0){
+            result += string.slice(offset);
+            break;
+        }
+        result += string.slice(offset, begin) + '<table>';
+        begin += 5;
+        let end = string.undefinedIndexOf('</tab>',begin) ?? string.length;
+
+        // split the section into table cell element parts
+        let section = string.slice(begin,end).split('\n');
+        for(let i=0; i<section.length; i++){
+            if(!section[i].trim().startsWith('>') && i > 0){
+                section[i-1] += '\n' + section[i];
+                section.splice(i,1);
+                i--;
+            }
+        }
+
+        let level = 0;
+        for(let i in section){
+            section[i] = section[i].trimLeft();
+            if(!section[i].startsWith('>')) continue;
+            let endOfFirst = section[i].undefinedIndexOf('\n') ?? section[i].length;
+            section[i] = '<tr><td>' + section[i].slice(1, endOfFirst) + '</td><td>' + section[i].slice(endOfFirst) + '</td></tr>';
+        }
+        result += section.join('') + '</table>';
+        
+        offset = end + 6;
+    }
+    string = result;
+
+    return (string
+    .replace(/(?<!>)\n(?!<)/g, '<br>')
+    .replace(/<=>/g,'&#8660;')
+    .replace(/<=/g,'&#8656;')
+    .replace(/=>/g,'&#8658;')
+    .replace(/<->/g,'&#8596;')
+    .replace(/<-/g,'&#8592;')
+    .replace(/->/g,'&#8594;'));
+}
+
+
+
 
 var stylesheet;
 for(let x of document.styleSheets) if(x.title == 'procedural_stylesheet'){
@@ -485,8 +603,8 @@ class Entity { // abstract
 
         if(data.description!=undefined && this.description != data.description){
             this.description = data.description;
-            this.dom.description.innerHTML = this.description;
-            this.dom.pureText.innerHTML = this.description;
+            this.dom.description.innerHTML = parseMarkup(this.description);
+            this.dom.pureText.innerHTML = parseMarkup(this.description);
             changed = true;
         }
 
@@ -1660,7 +1778,6 @@ class BoardEntity {
 })();
 
 /* TODO/NOTES:
-- good markup parser
 - edit images (show preview, order, delete, add and/or upload via own gallery menu)
 - map system
 

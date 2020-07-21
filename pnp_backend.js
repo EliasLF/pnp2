@@ -1581,7 +1581,7 @@ io.on('connection', (socket) => {
         }
 
         // maybe change later to just marking as deleted to allow easy recovery via undo tool (and after a while flush marked documents)
-        await mongodb.collection(collection).remove({'_id':id});
+        await mongodb.collection(collection).deleteOne({'_id':id});
     }
 
     socket.on('removeData', async function removeData(collection, id, removeChildren){

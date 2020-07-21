@@ -309,6 +309,22 @@ a{
     vertical-align: 2.5px;
 }
 
+.content_section td{
+    vertical-align:top;
+    border: 1px solid;
+    padding: 10px;
+}
+
+.content_section table{
+    border-spacing: 0;
+    border-collapse: collapse;
+}
+
+.content_section ul{
+    margin: 0;
+    padding-left: 20px;
+}
+
 .fold_arrow{
     width: 23px;
     display: inline-block;
