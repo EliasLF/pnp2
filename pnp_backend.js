@@ -1140,7 +1140,7 @@ io.on('connection', (socket) => {
             if(['ItemEntity','ItemEffectEntity','SkillEntity','CellEntity'].includes(collection)){
                 tmpData.reference_name = data.name.decodeHTML().toLowerCase().replace(/ /g,'_');
                 player = (await mongodb.collection(collection).findOne({_id: id}, {projection: {_id:0, player:1}}))?.player;
-                if(player == undefined) return error('player entity not found');
+                if(player == undefined) return error('player entity id not found');
                 if(await mongodb.collection(collection).findOne({reference_name: tmpData.reference_name, player, _id: {$ne: id}})){
                     error('there is already an entity of this type with an equivalent name within this player entity, '+
                     'which would create ambiguity in dynamically coded values');
@@ -1152,7 +1152,7 @@ io.on('connection', (socket) => {
             if(collection == 'PlayerEntity'){
                 tmpData.reference_name = data.name.decodeHTML().toLowerCase().replace(/ /g,'_');
                 storyline = (await mongodb.collection(collection).findOne({_id: id}, {projection: {_id:0, storyline:1}}))?.storyline;
-                if(storyline == undefined) return error('storyline entity not found');
+                if(storyline == undefined) return error('storyline entity id not found');
                 if(await mongodb.collection(collection).findOne({reference_name: tmpData.reference_name, storyline, _id: {$ne: id}})){
                     error('there is already an entity of this type with an equivalent name within this storyline entity, '+
                     'which would create ambiguity in dynamically coded values');
@@ -1220,20 +1220,22 @@ io.on('connection', (socket) => {
         else tmpData.name = data.name;
         if(typeof tmpData.name != 'string') return error('name must be a string');
 
-        // TODO: implement recursive checking (and remove playerId/storylineId)
-        if(['ItemEntity','ItemEffectEntity','SkillEntity','CellEntity'].includes(collection)){
-            tmpData.reference_name = tmpData.name.decodeHTML().toLowerCase().replace(/ /g,'_');
-            tmpData.player = loose ? parentId : playerId;
-            if(typeof tmpData.player != 'number') return error('you need to provide a player id for creating this type of entity');
-            if(await mongodb.collection(collection).findOne({reference_name: tmpData.reference_name, player: tmpData.player}))
-                return error('there is already an entity of this type with an equivalent name within this player entity, '+
-                'which would create ambiguity in dynamically coded values');
+        if(collection.startsWith('Item') || collection.startsWith('Skill') || collection.startsWith('Cell')){
+            if(loose) tmpData.player = parentId;
+            else if(collection.endsWith('Category')) tmpData.player = (await mongodb.collection(collection).findOne({_id: parentId}, {projection: {_id:0, player:1}}))?.player;
+            else tmpData.player = (await mongodb.collection(collection.slice(0,-6) + 'Category').findOne({_id: parentId}, {projection: {_id:0, player:1}}))?.player;
+
+            if(collection.endsWith('Entity')){
+                tmpData.reference_name = tmpData.name.decodeHTML().toLowerCase().replace(/ /g,'_');
+                if(await mongodb.collection(collection).findOne({reference_name: tmpData.reference_name, player: tmpData.player}))
+                    return socket.emit('err','there is already an entity of this type with an equivalent name within this player entity, '+
+                    'which would create ambiguity in dynamic values');
+            }
         }
 
         if(collection == 'PlayerEntity'){
             tmpData.reference_name = tmpData.name.decodeHTML().toLowerCase().replace(/ /g,'_');
             tmpData.storyline = parentId;
-            if(typeof tmpData.storyline != 'number') return error('you need to provide a parent (storyline) id for creating this type of entity');
             if(await mongodb.collection(collection).findOne({reference_name: tmpData.reference_name, storyline: tmpData.storyline}))
                 return error('there is already an entity of this type with an equivalent name within this storyline entity, '+
                 'which would create ambiguity in dynamically coded values');
@@ -1554,7 +1556,35 @@ io.on('connection', (socket) => {
 
     socket.on('addData', addData);
 
-    socket.on('removeData', async function(collection, id, removeChildren){
+    async function removeFromDB(collection, id, recursive){
+        if(recursive ?? true){
+            if(collection.endsWith('Category')){
+                let data = await mongodb.collection(collection).findOne({'_id':id});
+                for(let childId of data.categories) removeFromDB(collection, childId);
+                for(let childId of data.entities) removeFromDB(collection.slice(0,-8)+'Entity', childId);
+            }
+            else if(collection == 'PlayerEntity'){
+                let data = await mongodb.collection(collection).findOne({'_id':id});
+    
+                for(let childId of data.items.categories) removeFromDB('ItemCategory', childId);
+                for(let childId of data.items.entities) removeFromDB('ItemEntity', childId);
+    
+                for(let childId of data.itemEffects.categories) removeFromDB('ItemEffectCategory', childId);
+                for(let childId of data.itemEffects.entities) removeFromDB('ItemEffectEntity', childId);
+    
+                for(let childId of data.skills.categories) removeFromDB('SkillCategory', childId);
+                for(let childId of data.skills.entities) removeFromDB('SkillEntity', childId);
+    
+                for(let childId of data.cells.categories) removeFromDB('CellCategory', childId);
+                for(let childId of data.cells.entities) removeFromDB('CellEntity', childId);
+            }
+        }
+
+        // maybe change later to just marking as deleted to allow easy recovery via undo tool (and after a while flush marked documents)
+        await mongodb.collection(collection).remove({'_id':id});
+    }
+
+    socket.on('removeData', async function removeData(collection, id, removeChildren){
         function error(msg){
             let inputs = {collection, id, removeChildren};
             socket.emit('err',`removeData(collection:${collection}, id:${id}): ${msg}`,inputs);
@@ -1724,7 +1754,7 @@ io.on('connection', (socket) => {
             }
         }
 
-        // omit actual remove call to database for now (maybe future undo delete feature, made easier by this)
+        removeFromDB(collection, id, Boolean(removeChildren));
     });
     
 });
