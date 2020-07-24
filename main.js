@@ -2,18 +2,21 @@
 
 const _ = undefined;
 
-const htmlHelper = {
-    createNode: function(tag, properties, style){
-        var elem = document.createElement(tag);
-        for(let attr in properties){
-            elem[attr] = properties[attr];
-        }
-        for(let attr in style){
-            elem.style[attr] = style[attr];
-        }
-        return elem;
+document.createNode = function(tag, properties, style){
+    var elem = document.createElement(tag);
+    for(let attr in properties){
+        elem[attr] = properties[attr];
     }
+    for(let attr in style){
+        elem.style[attr] = style[attr];
+    }
+    return elem;
+};
+
+HTMLElement.prototype.removeFromParent = function(){
+	this.parentNode.removeChild(this);
 }
+Object.defineProperty(HTMLElement.prototype, "removeFromParent", {enumerable: false});
 
 Array.prototype.equals = function (array) {
     if (!array) return false;
@@ -157,6 +160,17 @@ function parseMarkup(string){
     .replace(/->/g,'&#8594;'));
 }
 
+async function uploadImage(file, tags){
+    var xhttp;
+    xhttp=new XMLHttpRequest();
+    xhttp.open("POST", "saveImage.php", false);
+    var form_data = new FormData();                  
+    form_data.append('file', file);
+    form_data.append('tags', tags);
+    xhttp.send(form_data);
+    if(!xhttp.responseText.trim().startsWith('Success')) throw xhttp.responseText.trim();
+    return parseInt(xhttp.responseText.split(':')[1]);
+}
 
 
 
@@ -192,12 +206,32 @@ else socket.on('connect', loadPromises.socket.resolve);
 if(document.readyState == 'complete') loadPromises.body.resolve();
 else window.onload = loadPromises.body.resolve;
 
-async function websocketRequestData(collection, id){
+async function socketRequestData(collection, id){
     return await (new Promise(resolve => {
         socket.on('serveData_'+collection+'_'+id, (data) => {
             resolve(data);
         });
         socket.emit('requestData', collection, id);
+    }));
+}
+
+var imageData;
+
+var imageDataResolves = [];
+socket.on('serveData_images', (data) => {
+    for(let x of data) x.tags = x.tags.toLowerCase().replace(/ +/g,',').replace(/-/g,',').split(',');
+    if(!imageData) imageData = data;
+    else{
+        let imageDataIds = imageData.map(x => x.id);
+        for(let x of data) if(!imageDataIds.includes(x.id)) imageData.push(x);
+    }
+    for(let resolve of imageDataResolves) resolve(data);
+});
+
+async function socketRequestDataImages(id, upperBound){
+    return await (new Promise(resolve => {
+        imageDataResolves.push(resolve);
+        socket.emit('requestData_images',id, upperBound);
     }));
 }
 
@@ -222,9 +256,9 @@ var objectSets = {
 };
 var currentStoryline;
 
-var storylineSelectionWrapper = htmlHelper.createNode('div',{className:'content_section'});
-storylineSelectionWrapper.appendChild(htmlHelper.createNode('h2',{innerHTML:'Switch storyline: '}));
-var storylineSelection = storylineSelectionWrapper.appendChild(htmlHelper.createNode('select',{onchange: async function(){
+var storylineSelectionWrapper = document.createNode('div',{className:'content_section'});
+storylineSelectionWrapper.appendChild(document.createNode('h2',{innerHTML:'Switch storyline: '}));
+var storylineSelection = storylineSelectionWrapper.appendChild(document.createNode('select',{onchange: async function(){
     if(this.value == currentStoryline.id) return;
     if(!objectSets.Storyline.get(parseInt(this.value))) await (new Storyline(parseInt(this.value))).init();
     currentStoryline = objectSets.Storyline.get(parseInt(this.value));
@@ -235,7 +269,7 @@ var storylineSelectionOptions = new Map();
 socket.on('serveData_storylineNames', names => {
     storylineSelection.innerHTML = '';
     for(let [id, name] of names){
-        storylineSelectionOptions.set(id, storylineSelection.appendChild(htmlHelper.createNode('option',{value:id, innerHTML:name})));
+        storylineSelectionOptions.set(id, storylineSelection.appendChild(document.createNode('option',{value:id, innerHTML:name})));
     }
 });
 
@@ -246,11 +280,23 @@ socket.on('serveData_storylineNames', names => {
 })();
 
 
+const popup = {
+    close(){
+        if(typeof this.onclose == 'function') if(this.onclose() === false) return;
+        delete this.onclose;
+        this.popup.style.display = '';
+        this.overlay.style.display = '';
+        document.getElementById('main').classList.remove('blurred');
+    }, 
 
-function closePopup(){
-    document.getElementById('popup').style.display = '';
-    document.getElementById('popup_overlay').style.display = '';
-    document.getElementById('main').classList.remove('blurred');
+    open(elems, onclose){
+        this.overlay.style.display = 'initial';
+        document.getElementById('main').classList.add('blurred');
+        this.popup.innerHTML = '';
+        for(let x of elems) this.popup.appendChild(x);
+        this.popup.style.display = 'initial';
+        this.onclose = onclose;
+    }
 }
 
 
@@ -269,12 +315,12 @@ class Storyline {
         // TODO: check for GM validation in localStorage
 
         this.dom = {};
-        this.dom.generalInfo = htmlHelper.createNode('div');
+        this.dom.generalInfo = document.createNode('div');
 
         this.dom.menuTabs = {};
-        this.dom.menuTabs.general = htmlHelper.createNode('div',{className:'secondary_menu_tab',innerHTML:'General',onclick: ()=>this.openTab('general')});
-        this.dom.menuTabs.players = htmlHelper.createNode('div');
-        this.dom.menuTabs.storlineInfoTypes = htmlHelper.createNode('div');
+        this.dom.menuTabs.general = document.createNode('div',{className:'secondary_menu_tab',innerHTML:'General',onclick: ()=>this.openTab('general')});
+        this.dom.menuTabs.players = document.createNode('div');
+        this.dom.menuTabs.storlineInfoTypes = document.createNode('div');
 
         this.sortables = {};
         this.sortables.storlineInfoTypes = new Sortable.default([this.dom.menuTabs.storlineInfoTypes], {
@@ -352,7 +398,7 @@ class Storyline {
     async init(){
         // load storyline data via websocket
         socket.on('updateData_Storyline_'+this.id, (data) => this.update(data));
-        await this.update(await websocketRequestData('Storyline', this.id));
+        await this.update(await socketRequestData('Storyline', this.id));
         return this;
     }
 
@@ -526,35 +572,64 @@ class Entity { // abstract
         ];
 
         this.dom = {};
-        this.dom.root = htmlHelper.createNode('div', {className: 'content_section entity',id:this.type.name+'_'+this.id});
+        this.dom.root = document.createNode('div', {className: 'content_section entity',id:this.type.name+'_'+this.id});
         this.dom.input = {};
-        this.dom.input.cancelEdit = htmlHelper.createNode('button',{className:'cancel_edit_button', innerHTML:'Cancel', onclick:()=>this.cancelEdit()});
-        this.dom.input.saveEdit = htmlHelper.createNode('button',{className:'save_edit_button', innerHTML:'Save', onclick:()=>this.saveEdit()});
+        this.dom.input.cancelEdit = document.createNode('button',{className:'cancel_edit_button', innerHTML:'Cancel', onclick:()=>this.cancelEdit()});
+        this.dom.input.saveEdit = document.createNode('button',{className:'save_edit_button', innerHTML:'Save', onclick:()=>this.saveEdit()});
 
         this.dom.icons = {};
-        this.dom.icons.draggable = this.dom.root.appendChild(htmlHelper.createNode('img', {className: 'icon draggable_icon drag_handle_entity', src:'icons/draggable.svg', onmousedown:()=>{
+        this.dom.icons.draggable = this.dom.root.appendChild(document.createNode('img', {className: 'icon draggable_icon drag_handle_entity', src:'icons/draggable.svg', onmousedown:()=>{
             this.toggleOpen(false);
         }}));
-        this.dom.icons.edit = this.dom.root.appendChild(htmlHelper.createNode('img', {className: 'icon edit_icon', src:'icons/pencil-2.png', onclick: ()=>this.edit()}));
-        this.dom.icons.delete = this.dom.root.appendChild(htmlHelper.createNode('img', {className: 'icon delete_icon', src:'icons/bin-2.png', onclick: ()=>this.delete()}, {display:'none'}));
+        this.dom.icons.edit = this.dom.root.appendChild(document.createNode('img', {className: 'icon edit_icon', src:'icons/pencil-2.png', onclick: ()=>this.edit()}));
+        this.dom.icons.delete = this.dom.root.appendChild(document.createNode('img', {className: 'icon delete_icon', src:'icons/bin-2.png', onclick: ()=>this.delete()}, {display:'none'}));
 
-        this.dom.title = this.dom.root.appendChild(htmlHelper.createNode('h3', {onclick: ()=>this.toggleOpen()}));
-        this.dom.foldArrow = this.dom.title.appendChild(htmlHelper.createNode('span', {className:'fold_arrow non_selectable', innerHTML: String.fromCharCode(9654)}));
-        this.dom.name = this.dom.title.appendChild(htmlHelper.createNode('span'));
+        this.dom.title = this.dom.root.appendChild(document.createNode('h3', {onclick: ()=>this.toggleOpen()}));
+        this.dom.foldArrow = this.dom.title.appendChild(document.createNode('span', {className:'fold_arrow non_selectable', innerHTML: String.fromCharCode(9654)}));
+        this.dom.name = this.dom.title.appendChild(document.createNode('span'));
 
-        this.dom.main = this.dom.root.appendChild(htmlHelper.createNode('div',_,{display: 'none', marginTop:'20px'}));
-        this.dom.pureText = this.dom.main.appendChild(htmlHelper.createNode('div'));
-        this.dom.firstImage = this.dom.main.appendChild(htmlHelper.createNode('img',{loading:'lazy', className:'first_content_image'}));
+        this.dom.main = this.dom.root.appendChild(document.createNode('div',_,{display: 'none', marginTop:'20px'}));
+        this.dom.pureText = this.dom.main.appendChild(document.createNode('div'));
+        this.dom.firstImage = this.dom.main.appendChild(document.createNode('img',{loading:'lazy', className:'first_content_image'}));
 
-        this.dom.text = this.dom.main.appendChild(htmlHelper.createNode('div',{className:'content_text'}));
-        this.dom.grid = this.dom.text.appendChild(htmlHelper.createNode('div',{className:'content_grid'}));
-        this.dom.descriptionLabel = this.dom.grid.appendChild(htmlHelper.createNode('div', {innerHTML: 'Description:'}));
-        this.dom.description = this.dom.grid.appendChild(htmlHelper.createNode('div', {innerHTML: this.description}));
-        this.dom.locationsLabel = this.dom.grid.appendChild(htmlHelper.createNode('div', {innerHTML: 'Locations:'},{display:'none'}));
-        this.dom.locations = this.dom.grid.appendChild(htmlHelper.createNode('div',_,{display:'none'}));
-        this.dom.locationsIcon = this.dom.locations.appendChild(htmlHelper.createNode('img', {className: 'icon map_icon', src:'icons/maps-pin.png'}));
+        this.dom.text = this.dom.main.appendChild(document.createNode('div',{className:'content_text'}));
+        this.dom.grid = this.dom.text.appendChild(document.createNode('div',{className:'content_grid'}));
+        this.dom.descriptionLabel = this.dom.grid.appendChild(document.createNode('div', {innerHTML: 'Description:'}));
+        this.dom.description = this.dom.grid.appendChild(document.createNode('div'));
+        this.dom.locationsLabel = this.dom.grid.appendChild(document.createNode('div', {innerHTML: 'Locations:'},{display:'none'}));
+        this.dom.locations = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
+        this.dom.locationsIcon = this.dom.locations.appendChild(document.createNode('img', {className: 'icon map_icon', src:'icons/maps-pin.png'}));
+        this.dom.imageEditLabel = this.dom.grid.appendChild(document.createNode('div',{innerHTML:'Images:'},{display:'none'}));
+        this.dom.imageEdit = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
+        this.dom.imageEditSection = this.dom.imageEdit.appendChild(document.createNode('div'));
+        let $this = this;
+        this.dom.imageEdit.appendChild(document.createNode('div',{className:'edit_image_add_wrapper'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'edit_image_add', onclick: async function(){
+            let imgId = await Entity.openImgMenuPopup();
+            if(imgId != undefined && !$this.editImages.includes(imgId)){
+                $this.editImages.push(imgId);
+                $this.dom.imageEditSection.appendChild($this.createEditImage(imgId));
+            }
+        }}));
 
-        this.dom.gallery = this.dom.main.appendChild(htmlHelper.createNode('div',{className:'content_gallery'}));
+        this.sortables = {};
+        this.sortables.editImages = new Sortable.default([this.dom.imageEditSection], {
+            draggable: ".edit_image_wrapper",
+            delay: 200,
+            mirror: {
+              constrainDimensions: true
+            }
+        });
+
+        this.sortables.editImages.on('sortable:stop', e => {
+            if(e.data.newIndex != e.data.oldIndex){
+                let imgId = this.editImages.splice(e.data.oldIndex,1)[0];
+                this.editImages.splice(e.data.newIndex,0,imgId);
+            }
+        });
+
+
+        this.dom.gallery = this.dom.main.appendChild(document.createNode('div',{className:'content_gallery'}));
 
         this.dom.root.appendChild(this.dom.input.saveEdit);
         this.dom.root.appendChild(this.dom.input.cancelEdit);
@@ -628,7 +703,7 @@ class Entity { // abstract
                 if(this.images.length > 1){
                     this.dom.gallery.innerHTML = '';
                     for(let imgId of this.images.slice(1)){
-                        this.dom.gallery.appendChild(htmlHelper.createNode('img',{
+                        this.dom.gallery.appendChild(document.createNode('img',{
                             loading:'lazy', 
                             className:'content_image', 
                             src:'loadImage.php?id='+imgId, 
@@ -656,6 +731,9 @@ class Entity { // abstract
         this.dom.locationsLabel.style.display = (this.coordinates?.length) ? '' : 'none';
         this.dom.locations.style.display = (this.coordinates?.length) ? '' : 'none';
 
+        this.dom.imageEditLabel.style.display = 'none';
+        this.dom.imageEdit.style.display = 'none';
+
         if(this.images?.[0] != undefined){
             this.dom.firstImage.style.display = '';
             this.dom.gallery.style.display = this.images.length > 1 ? '' : 'none';
@@ -677,23 +755,48 @@ class Entity { // abstract
         }
     }
 
+    createEditImage(imgId){
+        let wrapper = document.createNode('div',{className:'edit_image_wrapper'});
+        wrapper.appendChild(document.createNode('img',{
+            loading:'lazy',
+            className:'edit_image',
+            src:'loadImage.php?id='+imgId
+        }));
+        wrapper.appendChild(document.createNode('div',{
+            innerHTML:'x',
+            className:'edit_image_delete',
+            onclick: e=>{
+                e.stopPropagation();
+                wrapper.removeFromParent();
+                this.editImages.splice(this.editImages.indexOf(imgId),1);
+            }
+        }));
+        return wrapper;
+    }
+
     edit(){
         this.setEditing(true);
         currentlyEditing = this;
+
+        this.editImages = this.images.slice();
+        this.dom.imageEditSection.innerHTML = '';
+        for(let imgId of this.editImages) this.dom.imageEditSection.appendChild(this.createEditImage(imgId));
 
         this.dom.firstImage.style.display = 'none';
         this.dom.gallery.style.display = 'none';
         this.dom.pureText.style.display = 'none';
         this.dom.name.innerHTML = '';
-        this.dom.input.name = this.dom.name.appendChild(htmlHelper.createNode('input',{value: this.name.decodeHTML(), onclick: e => e.stopPropagation()}));
+        this.dom.input.name = this.dom.name.appendChild(document.createNode('input',{value: this.name.decodeHTML(), onclick: e => e.stopPropagation()}));
 
         this.dom.grid.style.display = '';
         this.dom.descriptionLabel.style.display = '';
         this.dom.description.style.display = '';
         this.dom.description.innerHTML = '';
-        this.dom.input.description = this.dom.description.appendChild(htmlHelper.createNode('textarea',{value: this.description}));
+        this.dom.input.description = this.dom.description.appendChild(document.createNode('textarea',{value: this.description}));
         this.dom.locationsLabel.style.display = '';
         this.dom.locations.style.display = '';
+        this.dom.imageEditLabel.style.display = '';
+        this.dom.imageEdit.style.display = '';
 
         this.dom.icons.draggable.style.display = 'none';
         this.dom.icons.edit.style.display = 'none';
@@ -712,7 +815,9 @@ class Entity { // abstract
 
         if(this.dom.input.description.value != this.description) changed.description = this.dom.input.description.value;
 
-        // TODO: images, map (coordinates, path)
+        if(!this.editImages.equals(this.images)) changed.images = this.editImages;
+
+        // TODO: map (coordinates, path)
 
         if(Object.keys(changed).length) socket.emit('updateData',this.type.name,this.id,changed);
     }
@@ -722,7 +827,7 @@ class Entity { // abstract
         currentlyEditing = null;
 
         this.dom.name.innerHTML = this.name;
-        this.dom.description.innerHTML = this.description;
+        this.dom.description.innerHTML = parseMarkup(this.description);
         this.reloadDOMVisibility();
     }
 
@@ -743,11 +848,79 @@ class Entity { // abstract
     }
 
     static openImgPopup(imgId){
-        document.getElementById('popup_overlay').style.display = 'initial';
-        document.getElementById('main').classList.add('blurred');
-        document.getElementById('popup').innerHTML = '';
-        document.getElementById('popup').appendChild(htmlHelper.createNode('img',{src:'loadImage.php?id='+imgId, onclick:closePopup}));
-        document.getElementById('popup').style.display = 'initial';
+        popup.open([document.createNode('img',{src:'loadImage.php?id='+imgId})]);
+    }
+
+    static async openImgMenuPopup(){
+        let imgDataPromise = socketRequestDataImages();
+        let returnReaction;
+        let returnPromise = new Promise((resolve, reject) => {returnReaction = {resolve, reject}});
+
+        var currentPhrases;
+        function findImages(){
+            let searchPhrases = searchInput.value.toLowerCase().replace(/ +/g,',').replace(/-/g,',').split(',');
+            if(currentPhrases?.equals(searchPhrases)) return;
+            currentPhrases = searchPhrases;
+            imageSection.innerHTML = '';
+            let found = false;
+            for(let img of imageData){
+                if(searchPhrases.every(phrase => img.tags.some(tag => tag.includes(phrase)))){
+                    found = true;
+                    imageSection.appendChild(document.createNode('img',{
+                        loading:'lazy',
+                        onclick: e=>{
+                            e.stopPropagation();
+                            returnReaction.resolve(img.id);
+                            delete popup.onclose;
+                            popup.close();
+                        },
+                        src:'loadImage.php?id='+img.id
+                    }));
+                }
+            }
+            if(!found) imageSection.innerHTML = 'No search results';
+        }
+
+        var wrapper = document.createNode('div',{className:'image_menu_wrapper'});
+
+        var searchSection = wrapper.appendChild(document.createNode('div',{innerHTML:'Search: ', className:'image_menu_search_section'}));
+        var searchInput = searchSection.appendChild(document.createNode('input',{
+            onclick: e=>e.stopPropagation(),
+            onkeyup: e=>{
+                findImages();
+            },
+            className:'image_menu_search_input'
+        }));
+
+        var imageSection = wrapper.appendChild(document.createNode('div',{id: 'image_menu', innerHTML:'Enter a search phrase'}));
+
+        var uploadSection = wrapper.appendChild(document.createNode('div',{onclick: e=>e.stopPropagation()}));
+        uploadSection.appendChild(document.createNode('h3',{innerHTML:'Upload new image:'}));
+        var uploadFileInput = uploadSection.appendChild(document.createNode('input',{
+            type: 'file',
+            accept: 'image/*'
+        }));
+        uploadSection.appendChild(document.createTextNode(' Tags: '))
+        var uploadTagsInput = uploadSection.appendChild(document.createNode('input',_,{marginRight:'7px'}));
+        uploadSection.appendChild(document.createNode('button',{innerHTML:'Upload',onclick: async function(){
+            if(uploadFileInput.files.length === 0) return;
+            try{
+                returnReaction.resolve(await uploadImage(uploadFileInput.files[0], uploadTagsInput.value));
+                popup.close();
+            }
+            catch(e){
+                alert(e);
+            }
+        }}));
+
+        await imgDataPromise;
+        popup.open([wrapper], returnReaction.reject);
+        try{
+            return await returnPromise;
+        }
+        catch(e){
+            return;
+        }
     }
 }
 
@@ -761,7 +934,7 @@ class StorylineInfoEntity extends Entity {
     async init(){
         // load entity data via websocket
         socket.on('updateData_StorylineInfoEntity_'+this.id, (data) => this.update(data));
-        const data = await websocketRequestData('StorylineInfoEntity', this.id);
+        const data = await socketRequestData('StorylineInfoEntity', this.id);
         await this.update(data);
         return this;
     }
@@ -786,54 +959,54 @@ class PlayerEntity extends Entity {
 
         this.dom.icons.draggable.style.display = 'none';
 
-        this.dom.menuTab = htmlHelper.createNode('div', {className:'secondary_menu_tab',onclick: ()=>this.storyline.openPlayer(this.id)});
+        this.dom.menuTab = document.createNode('div', {className:'secondary_menu_tab',onclick: ()=>this.storyline.openPlayer(this.id)});
         this.dom.menuTabs = {};
-        this.dom.menuTabs.info = htmlHelper.createNode('div', {innerHTML:'Info', onclick: ()=>this.openTab('info')});
-        this.dom.menuTabs.cells = htmlHelper.createNode('div', {innerHTML:'Values', onclick: ()=>this.openTab('cells')});
-        this.dom.menuTabs.items = htmlHelper.createNode('div', {innerHTML:'Items', onclick: ()=>this.openTab('items')});
-        this.dom.menuTabs.itemEffects = htmlHelper.createNode('div', {innerHTML:'Effects', onclick: ()=>this.openTab('itemEffects')});
-        this.dom.menuTabs.skills = htmlHelper.createNode('div', {innerHTML:'Skills', onclick: ()=>this.openTab('skills')});
+        this.dom.menuTabs.info = document.createNode('div', {innerHTML:'Info', onclick: ()=>this.openTab('info')});
+        this.dom.menuTabs.cells = document.createNode('div', {innerHTML:'Values', onclick: ()=>this.openTab('cells')});
+        this.dom.menuTabs.items = document.createNode('div', {innerHTML:'Items', onclick: ()=>this.openTab('items')});
+        this.dom.menuTabs.itemEffects = document.createNode('div', {innerHTML:'Effects', onclick: ()=>this.openTab('itemEffects')});
+        this.dom.menuTabs.skills = document.createNode('div', {innerHTML:'Skills', onclick: ()=>this.openTab('skills')});
 
         this.dom.items = {};
-        this.dom.items.root = htmlHelper.createNode('div');
-        this.dom.items.categories = this.dom.items.root.appendChild(htmlHelper.createNode('div',{
+        this.dom.items.root = document.createNode('div');
+        this.dom.items.categories = this.dom.items.root.appendChild(document.createNode('div',{
             id:'PlayerEntity_'+this.id+'_items_categories', 
             className:'category_container'
         }));
-        this.dom.items.entities = this.dom.items.root.appendChild(htmlHelper.createNode('div',{
+        this.dom.items.entities = this.dom.items.root.appendChild(document.createNode('div',{
             id:'PlayerEntity_'+this.id+'_items_entities', 
             className:'entity_container'
         }));
 
         this.dom.itemEffects = {};
-        this.dom.itemEffects.root = htmlHelper.createNode('div');
-        this.dom.itemEffects.categories = this.dom.itemEffects.root.appendChild(htmlHelper.createNode('div',{
+        this.dom.itemEffects.root = document.createNode('div');
+        this.dom.itemEffects.categories = this.dom.itemEffects.root.appendChild(document.createNode('div',{
             id:'PlayerEntity_'+this.id+'_itemEffects_categories', 
             className:'category_container'
         }));
-        this.dom.itemEffects.entities = this.dom.itemEffects.root.appendChild(htmlHelper.createNode('div',{
+        this.dom.itemEffects.entities = this.dom.itemEffects.root.appendChild(document.createNode('div',{
             id:'PlayerEntity_'+this.id+'_itemEffects_entities', 
             className:'entity_container'
         }));
 
         this.dom.cells = {};
-        this.dom.cells.root = htmlHelper.createNode('div');
-        this.dom.cells.categories = this.dom.cells.root.appendChild(htmlHelper.createNode('div',{
+        this.dom.cells.root = document.createNode('div');
+        this.dom.cells.categories = this.dom.cells.root.appendChild(document.createNode('div',{
             id:'PlayerEntity_'+this.id+'_cells_categories', 
             className:'category_container'
         }));
-        this.dom.cells.entities = this.dom.cells.root.appendChild(htmlHelper.createNode('div',{
+        this.dom.cells.entities = this.dom.cells.root.appendChild(document.createNode('div',{
             id:'PlayerEntity_'+this.id+'_cells_entities', 
             className:'entity_container'
         }));
 
         this.dom.skills = {};
-        this.dom.skills.root = htmlHelper.createNode('div');
-        this.dom.skills.categories = this.dom.skills.root.appendChild(htmlHelper.createNode('div',{
+        this.dom.skills.root = document.createNode('div');
+        this.dom.skills.categories = this.dom.skills.root.appendChild(document.createNode('div',{
             id:'PlayerEntity_'+this.id+'_skills_categories', 
             className:'category_container'
         }));
-        this.dom.skills.entities = this.dom.skills.root.appendChild(htmlHelper.createNode('div',{
+        this.dom.skills.entities = this.dom.skills.root.appendChild(document.createNode('div',{
             id:'PlayerEntity_'+this.id+'_skills_entities', 
             className:'entity_container'
         }));
@@ -931,7 +1104,7 @@ class PlayerEntity extends Entity {
     async init(){
         // load entity data via websocket
         socket.on('updateData_PlayerEntity_'+this.id, (data) => this.update(data));
-        const data = await websocketRequestData('PlayerEntity', this.id);
+        const data = await socketRequestData('PlayerEntity', this.id);
         await this.update(data);
         return this;
     }
@@ -1118,7 +1291,7 @@ class ItemEntity extends Entity {
     async init(){
         // load entity data via websocket
         socket.on('updateData_ItemEntity_'+this.id, (data) => this.update(data));
-        const data = await websocketRequestData('ItemEntity', this.id);
+        const data = await socketRequestData('ItemEntity', this.id);
         await this.update(data);
         return this;
     }
@@ -1175,7 +1348,7 @@ class ItemEffectEntity extends Entity {
     async init(){
         // load entity data via websocket
         socket.on('updateData_ItemEffectEntity_'+this.id, (data) => this.update(data));
-        const data = await websocketRequestData('ItemEffectEntity', this.id);
+        const data = await socketRequestData('ItemEffectEntity', this.id);
         await this.update(data);
         return this;
     }
@@ -1235,7 +1408,7 @@ class SkillEntity extends Entity {
     async init(){
         // load entity data via websocket
         socket.on('updateData_SkillEntity_'+this.id, (data) => this.update(data));
-        const data = await websocketRequestData('SkillEntity', this.id);
+        const data = await socketRequestData('SkillEntity', this.id);
         await this.update(data);
         return this;
     }
@@ -1288,7 +1461,7 @@ class CellEntity extends Entity {
     async init(){
         // load entity data via websocket
         socket.on('updateData_CellEntity_'+this.id, (data) => this.update(data));
-        const data = await websocketRequestData('CellEntity', this.id);
+        const data = await socketRequestData('CellEntity', this.id);
         await this.update(data);
         return this;
     }
@@ -1350,28 +1523,28 @@ class Category {
 
 
         this.dom = {};
-        this.dom.root = htmlHelper.createNode('div',{className:'category',id:this.type.name+'_'+this.id});
+        this.dom.root = document.createNode('div',{className:'category',id:this.type.name+'_'+this.id});
 
         this.dom.input = {};
-        this.dom.input.cancelEdit = htmlHelper.createNode('button',{className:'cancel_edit_button', innerHTML:'Cancel', onclick:()=>this.cancelEdit()});
-        this.dom.input.saveEdit = htmlHelper.createNode('button',{className:'save_edit_button', innerHTML:'Save', onclick:()=>this.saveEdit()});
+        this.dom.input.cancelEdit = document.createNode('button',{className:'cancel_edit_button', innerHTML:'Cancel', onclick:()=>this.cancelEdit()});
+        this.dom.input.saveEdit = document.createNode('button',{className:'save_edit_button', innerHTML:'Save', onclick:()=>this.saveEdit()});
 
 
-        this.dom.head = this.dom.root.appendChild(htmlHelper.createNode('div', {className: 'category_head content_section'}));
+        this.dom.head = this.dom.root.appendChild(document.createNode('div', {className: 'category_head content_section'}));
         this.dom.icons = {};
-        this.dom.icons.draggable = this.dom.head.appendChild(htmlHelper.createNode('img', {className: 'icon draggable_icon drag_handle_category', src:'icons/draggable.svg', onmousedown: ()=>{
+        this.dom.icons.draggable = this.dom.head.appendChild(document.createNode('img', {className: 'icon draggable_icon drag_handle_category', src:'icons/draggable.svg', onmousedown: ()=>{
             this.toggleOpen(false);
         }}));
-        this.dom.icons.edit = this.dom.head.appendChild(htmlHelper.createNode('img', {className: 'icon edit_icon', src:'icons/pencil-2.png', onclick: ()=>this.edit()}));
-        this.dom.icons.delete = this.dom.head.appendChild(htmlHelper.createNode('img', {className: 'icon delete_icon', src:'icons/bin-2.png', onclick: ()=>this.delete()}, {display:'none'}));
+        this.dom.icons.edit = this.dom.head.appendChild(document.createNode('img', {className: 'icon edit_icon', src:'icons/pencil-2.png', onclick: ()=>this.edit()}));
+        this.dom.icons.delete = this.dom.head.appendChild(document.createNode('img', {className: 'icon delete_icon', src:'icons/bin-2.png', onclick: ()=>this.delete()}, {display:'none'}));
 
-        this.dom.title = this.dom.head.appendChild(htmlHelper.createNode('h3', {onclick: ()=>this.toggleOpen()}));
-        this.dom.foldArrow = this.dom.title.appendChild(htmlHelper.createNode('span', {className:'fold_arrow non_selectable', innerHTML: String.fromCharCode(9654)}));
-        this.dom.name = this.dom.title.appendChild(htmlHelper.createNode('span'));
+        this.dom.title = this.dom.head.appendChild(document.createNode('h3', {onclick: ()=>this.toggleOpen()}));
+        this.dom.foldArrow = this.dom.title.appendChild(document.createNode('span', {className:'fold_arrow non_selectable', innerHTML: String.fromCharCode(9654)}));
+        this.dom.name = this.dom.title.appendChild(document.createNode('span'));
 
-        this.dom.body = this.dom.root.appendChild(htmlHelper.createNode('div', {className: 'category_body'}));
-        this.dom.categories = this.dom.body.appendChild(htmlHelper.createNode('div',{id:this.type.name+'_'+this.id+'_categories',className:'category_container'}));
-        this.dom.entities = this.dom.body.appendChild(htmlHelper.createNode('div',{id:this.type.name+'_'+this.id+'_entities',className:'entity_container'}));
+        this.dom.body = this.dom.root.appendChild(document.createNode('div', {className: 'category_body'}));
+        this.dom.categories = this.dom.body.appendChild(document.createNode('div',{id:this.type.name+'_'+this.id+'_categories',className:'category_container'}));
+        this.dom.entities = this.dom.body.appendChild(document.createNode('div',{id:this.type.name+'_'+this.id+'_entities',className:'entity_container'}));
 
         this.dom.head.appendChild(this.dom.input.saveEdit);
         this.dom.head.appendChild(this.dom.input.cancelEdit);
@@ -1390,7 +1563,7 @@ class Category {
 
     async init(){
         socket.on('updateData_'+this.type.name+'_'+this.id, (data) => this.update(data));
-        const data = await websocketRequestData(this.type.name, this.id);
+        const data = await socketRequestData(this.type.name, this.id);
         this.update(data);
         return this;
     }
@@ -1459,7 +1632,7 @@ class Category {
         currentlyEditing = this;
 
         this.dom.name.innerHTML = '';
-        this.dom.input.name = this.dom.name.appendChild(htmlHelper.createNode('input',{value: this.name.decodeHTML(), onclick: e => e.stopPropagation()}));
+        this.dom.input.name = this.dom.name.appendChild(document.createNode('input',{value: this.name.decodeHTML(), onclick: e => e.stopPropagation()}));
 
         this.dom.icons.draggable.style.display = 'none';
         this.dom.icons.edit.style.display = 'none';
@@ -1574,15 +1747,15 @@ class StorylineInfoType {
 
 
         this.dom = {};
-        this.dom.root = htmlHelper.createNode('div');
+        this.dom.root = document.createNode('div');
 
-        this.dom.menuTab = htmlHelper.createNode('div', {className:'secondary_menu_tab',onclick: ()=>this.storyline.openTab(this.id)});
+        this.dom.menuTab = document.createNode('div', {className:'secondary_menu_tab',onclick: ()=>this.storyline.openTab(this.id)});
 
-        this.dom.categories = this.dom.root.appendChild(htmlHelper.createNode('div',{
+        this.dom.categories = this.dom.root.appendChild(document.createNode('div',{
             id:'StorylineInfoType_'+this.id+'_categories', 
             className:'category_container'
         }));
-        this.dom.entities = this.dom.root.appendChild(htmlHelper.createNode('div',{
+        this.dom.entities = this.dom.root.appendChild(document.createNode('div',{
             id:'StorylineInfoType_'+this.id+'_entities', 
             className:'entity_container'
         }));
@@ -1672,7 +1845,7 @@ class StorylineInfoType {
 
     async init(){
         socket.on('updateData_StorylineInfoType_'+this.id, (data) => this.update(data));
-        const data = await websocketRequestData('StorylineInfoType', this.id);
+        const data = await socketRequestData('StorylineInfoType', this.id);
         await this.update(data);
         return this;
     }
@@ -1766,6 +1939,13 @@ class BoardEntity {
 (async function(){
     await loadPromises.body.loaded;
 
+    popup.popup = document.getElementById('popup');
+    popup.overlay = document.getElementById('popup_overlay');
+    popup.overlay.onclick = e=>{
+        e.stopPropagation();
+        popup.close();
+    }
+
     document.body.onclick = e => {
         if(currentlyEditing && e?.target && !currentlyEditing.dom.root.contains(e.target)) currentlyEditing?.saveEdit();
     };
@@ -1779,6 +1959,7 @@ class BoardEntity {
 
 /* TODO/NOTES:
 - edit images (show preview, order, delete, add and/or upload via own gallery menu)
+- value system
 - map system
 
 - id system in MongoDB

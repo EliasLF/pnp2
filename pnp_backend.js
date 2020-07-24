@@ -30,11 +30,40 @@ const mailTransport = require('nodemailer').createTransport({
         rejectUnauthorized: false
     }
 });
+
 var mongodb;
 const MongoClient = require('mongodb').MongoClient;
 MongoClient.connect('mongodb://localhost:27017', {useNewUrlParser: true, useUnifiedTopology: true}, (err,client)=>{
     if(err) console.error(err);
     else mongodb = client.db('pnp');
+});
+
+const mysql = require('mysql');
+mysql.connectResolves = [];
+mysql.query = async function(query){
+    if(!mysql.connectionReady){
+        await new Promise(resolve => mysql.connectResolves.push(resolve));
+    }
+    try{
+        return await new Promise((resolve, reject) => {
+            mysql.connection.query(query, (err, result)=>{
+                if(err) reject(err);
+                else resolve(result);
+            });
+        });
+    }  
+    catch(e){
+        throw new Error(e);
+    }
+};
+
+mysql.connection = mysql.createConnection(config.mysql);
+mysql.connection.connect(function(err){
+    if(err) console.error('Error while connecting to MySQL: ',err);
+    else{
+        mysql.connectionReady = true;
+        for(let resolve of mysql.connectResolves) resolve();
+    }
 });
 
 const _ = undefined;
@@ -993,6 +1022,18 @@ io.on('connection', (socket) => {
     socket.on('requestData_storylineNames', async function(){
         if(!mongodb) return socket.emit('err','requestData_storylineNames(): database inactive');
         socket.emit('serveData_storylineNames', (await mongodb.collection('Storyline').find().toArray()).map(x => [x._id, x.name]));
+    });
+
+    socket.on('requestData_images', async function(id, upperBound){
+        try{
+            if(id == undefined) socket.emit('serveData_images', (await mysql.query('SELECT id, tags FROM images')));
+            else if(Array.isArray(id)) socket.emit('serveData_images', (await mysql.query('SELECT id, tags FROM images WHERE id IN ('+id.join(',')+')')));
+            else if(upperBound == undefined) socket.emit('serveData_images', (await mysql.query('SELECT id, tags FROM images WHERE id = '+id)));
+            else socket.emit('serveData_images', (await mysql.query('SELECT id, tags FROM images WHERE id BETWEEN '+id+' AND '+upperBound)));
+        }
+        catch(e){
+            socket.emit('err','requestData_images(): '+e);
+        }
     });
 
     

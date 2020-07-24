@@ -15,9 +15,6 @@ if ($conn->connect_error) {
 }
 
 try{
-	$sql = "LOCK TABLES images READ;";
-	if(!$conn->query($sql)) die("Error: " . $sql . "\n" . $conn->error);
-	
 	$sql = "SELECT type, data FROM images WHERE id = {$_GET["id"]};";
 	$result = $conn->query($sql);
 	if(!$result) die("Error: " . $sql . "\n" . $conn->error);
@@ -31,9 +28,6 @@ try{
 	} else {
 		echo "Error: Image not found";
 	}
-
-	$sql = "UNLOCK TABLES;";
-	if(!$conn->query($sql)) die("Error: " . $sql . "\n" . $conn->error);
 } finally {
 	$conn->close();
 }
