@@ -338,7 +338,7 @@ a{
     width: 100%;
 }
 
-.content_section>h2 input, .content_section>h3 input{
+.edit_name{
     width: calc(100% - 65px);
     vertical-align: 2.5px;
 }

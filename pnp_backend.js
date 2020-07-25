@@ -1060,13 +1060,13 @@ io.on('connection', (socket) => {
         if(collection.endsWith('Category') || collection == 'StorylineInfoType'){
             if(data.entities != undefined){
                 tmpData.entities = data.entities;
-                if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => typeof x != 'number'))
+                if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => !Number.isInteger(x)))
                     return error('entities must be an array of numerical ids');
             }
             
             if(data.categories != undefined){
                 tmpData.categories = data.categories;
-                if(!Array.isArray(tmpData.categories) || tmpData.categories.some(x => typeof x != 'number'))
+                if(!Array.isArray(tmpData.categories) || tmpData.categories.some(x => !Number.isInteger(x)))
                     return error('categories must be an array of numerical ids');
             }
         }
@@ -1088,7 +1088,7 @@ io.on('connection', (socket) => {
 
             if(data.images != undefined){
                 tmpData.images = data.images;
-                if(!Array.isArray(tmpData.images) || tmpData.images.some(x => typeof x != 'number'))
+                if(!Array.isArray(tmpData.images) || tmpData.images.some(x => !Number.isInteger(x)))
                     return error('images must be an array of numerical ids');
             }
         }
@@ -1097,15 +1097,15 @@ io.on('connection', (socket) => {
             case 'ItemEntity': 
                 if(data.amount != undefined){
                     tmpData.amount = data.amount;
-                    if(Number.isInteger(tmpData.amount) || tmpData.amount < 0) return error('amount must be a positive integer');
+                    if(!Number.isInteger(tmpData.amount) || tmpData.amount < 0) return error('amount must be a positive integer');
                 }
                 break;
             
             case 'ItemEffectEntity': 
                 if(data.items != undefined){
                     tmpData.items = data.items;
-                    if(!Array.isArray(tmpData.items) || tmpData.items.some(x => typeof x != 'number')) 
-                        return error('items must be an array of numerical ids');
+                    if(!Array.isArray(tmpData.items) || tmpData.items.some(x => typeof x != 'object' || typeof x.mult != 'number' || !Number.isInteger(x.item))) 
+                        return error('items must be an array of objects of form {mult: Float, item: Int[id]}');
                 }
                 break;
             
@@ -1122,14 +1122,14 @@ io.on('connection', (socket) => {
                     if(data[property]?.entities != undefined){
                         if(!tmpData[property]) tmpData[property] = {};
                         tmpData[property].entities = data[property].entities;
-                        if(!Array.isArray(tmpData[property].entities) || tmpData[property].entities.some(x => typeof x != 'number'))
+                        if(!Array.isArray(tmpData[property].entities) || tmpData[property].entities.some(x => !Number.isInteger(x)))
                             return error(property+'.entities must be an array of numerical ids');
                     }
                     
                     if(data[property]?.categories != undefined){
                         if(!tmpData[property]) tmpData[property] = {};
                         tmpData[property].categories = data[property].categories;
-                        if(!Array.isArray(tmpData[property].categories) || tmpData[property].categories.some(x => typeof x != 'number'))
+                        if(!Array.isArray(tmpData[property].categories) || tmpData[property].categories.some(x => !Number.isInteger(x)))
                             return error(property+'.categories must be an array of numerical ids');
                     }
                 }
@@ -1139,39 +1139,39 @@ io.on('connection', (socket) => {
                 if(data.info?.types != undefined){
                     if(!tmpData.info) tmpData.info = {};
                     tmpData.info.types = data.info.types;
-                    if(!Array.isArray(tmpData.info.types) || tmpData.info.types.some(x => typeof x != 'number')) 
+                    if(!Array.isArray(tmpData.info.types) || tmpData.info.types.some(x => !Number.isInteger(x))) 
                         return error('info.types must be an array of numerical ids');
                 }
                 if(data.info?.general != undefined){
                     if(!tmpData.info) tmpData.info = {};
                     tmpData.info.general = data.info.general;
-                    if(!Array.isArray(tmpData.info.general) || tmpData.info.general.some(x => typeof x != 'number')) 
+                    if(!Array.isArray(tmpData.info.general) || tmpData.info.general.some(x => !Number.isInteger(x))) 
                         return error('info.general must be an array of numerical ids');
                 }
 
                 if(data.players?.entities != undefined){
                     if(!tmpData.players) tmpData.players = {};
                     tmpData.players.entities = data.players.entities;
-                    if(!Array.isArray(tmpData.players.entities) || tmpData.players.entities.some(x => typeof x != 'number')) 
+                    if(!Array.isArray(tmpData.players.entities) || tmpData.players.entities.some(x => !Number.isInteger(x))) 
                         return error('players.entities must be an array of numerical ids');
                 }
 
                 if(data.board?.entities != undefined){
                     if(!tmpData.board) tmpData.board = {};
                     tmpData.board.entities = data.board.entities;
-                    if(!Array.isArray(tmpData.board.entities) || tmpData.board.entities.some(x => typeof x != 'number')) 
+                    if(!Array.isArray(tmpData.board.entities) || tmpData.board.entities.some(x => !Number.isInteger(x))) 
                         return error('board.entities must be an array of numerical ids');
                 }
                 if(data.board?.environments != undefined){
                     if(!tmpData.board) tmpData.board = {};
                     tmpData.board.environments = data.board.environments;
-                    if(!Array.isArray(tmpData.board.environments) || tmpData.board.environments.some(x => typeof x != 'number')) 
+                    if(!Array.isArray(tmpData.board.environments) || tmpData.board.environments.some(x => !Number.isInteger(x))) 
                         return error('board.environments must be an array of numerical ids');
                 }
                 if(data.board?.activeEnvironment != undefined){
                     if(!tmpData.board) tmpData.board = {};
                     tmpData.board.activeEnvironment = data.board.activeEnvironment;
-                    if(typeof tmpData.board.activeEnvironment != 'number') 
+                    if(!Number.isInteger(tmpData.board.activeEnvironment))
                         return error('board.activeEnvironment must be a numerical id');
                 }
                 break;
@@ -1287,14 +1287,14 @@ io.on('connection', (socket) => {
                 tmpData.entities = []; // children are copied afterwards
             else if(data.entities == undefined) tmpData.entities = [];
             else tmpData.entities = data.entities;
-            if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => typeof x != 'number'))
+            if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => !Number.isInteger(x)))
                 return error('entities must be an array of numerical ids');
             
             if(template?.categories && (!templateMask || (templateMask.categories ?? templateMaskDefault))) 
                 tmpData.categories = []; // children are copied afterwards
             else if(data.categories == undefined) tmpData.categories = [];
             else tmpData.categories = data.categories;
-            if(!Array.isArray(tmpData.categories) || tmpData.categories.some(x => typeof x != 'number'))
+            if(!Array.isArray(tmpData.categories) || tmpData.categories.some(x => !Number.isInteger(x)))
                 return error('categories must be an array of numerical ids');
         }
         else if(collection.endsWith('Entity')){
@@ -1321,7 +1321,7 @@ io.on('connection', (socket) => {
                 tmpData.images = template.images;
             else if(data.images == undefined) tmpData.images = [];
             else tmpData.images = data.images;
-            if(!Array.isArray(tmpData.images) || tmpData.images.some(x => typeof x != 'number'))
+            if(!Array.isArray(tmpData.images) || tmpData.images.some(x => !Number.isInteger(x)))
                 return error('images must be an array of numerical ids');
         }
 
@@ -1345,8 +1345,8 @@ io.on('connection', (socket) => {
                 }
                 else if(data.items == undefined) tmpData.items = [];
                 else tmpData.items = data.items;
-                if(!Array.isArray(tmpData.items) || tmpData.items.some(x => typeof x != 'number')) 
-                    return error('items must be an array of numerical ids');
+                if(!Array.isArray(tmpData.items) || tmpData.items.some(x => typeof x != 'object' || typeof x.mult != 'number' || !Number.isInteger(x.item))) 
+                    return error('items must be an array of objects of form {mult: Float, item: Int[id]}');
                 break;
             
             case 'SkillEntity': 
@@ -1367,14 +1367,14 @@ io.on('connection', (socket) => {
                         tmpData[property].entities = []; 
                     else if(data[property]?.entities == undefined) tmpData[property].entities = [];
                     else tmpData[property].entities = data[property].entities;
-                    if(!Array.isArray(tmpData[property].entities) || tmpData[property].entities.some(x => typeof x != 'number'))
+                    if(!Array.isArray(tmpData[property].entities) || tmpData[property].entities.some(x => !Number.isInteger(x)))
                         return error(property+'.entities must be an array of numerical ids');
                     
                     if(template?.[property]?.categories && (!templateMask || (templateMask[property]?.categories ?? templateMaskDefault))) 
                         tmpData[property].categories = []; 
                     else if(data[property]?.categories == undefined) tmpData[property].categories = [];
                     else tmpData[property].categories = data[property].categories;
-                    if(!Array.isArray(tmpData[property].categories) || tmpData[property].categories.some(x => typeof x != 'number'))
+                    if(!Array.isArray(tmpData[property].categories) || tmpData[property].categories.some(x => !Number.isInteger(x)))
                         return error(property+'.categories must be an array of numerical ids');
                 }
                 break;
@@ -1775,7 +1775,7 @@ io.on('connection', (socket) => {
 
         // if is item delete from all itemEffects
         if(collection == 'ItemEntity'){
-            let concernedItemEffects = (await mongodb.collection('ItemEffectEntity').find({'items':id}).toArray()).map(x => x._id);
+            let concernedItemEffects = (await mongodb.collection('ItemEffectEntity').find({'items.item':id}).toArray()).map(x => x._id);
 
             if(!callbacksAfterHalts.ItemEffectEntity) callbacksAfterHalts.ItemEffectEntity = {};
             for(let effectId of concernedItemEffects){
@@ -1788,7 +1788,7 @@ io.on('connection', (socket) => {
                 io.emit('updateData_ItemEffectEntity_'+effectId, 
                     (await mongodb.collection('ItemEffectEntity').findOneAndUpdate(
                         {'_id':effectId},
-                        {$pull: {'items':id}},
+                        {$pull: {'items':{'item':id}}},
                         {returnOriginal:false, projection:{_id:0,items:1}}
                     )).value
                 );

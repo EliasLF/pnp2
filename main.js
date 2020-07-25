@@ -35,6 +35,23 @@ Array.prototype.equals = function (array) {
 // Hide method from for-in loops
 Object.defineProperty(Array.prototype, "equals", {enumerable: false});
 
+Object.prototype.deepEquals = function (obj){
+    if(typeof this != typeof obj) return false;
+    if(!Object.keys(this).equals(Object.keys(obj))) return false;
+
+    for(let i in this){
+        if(typeof this[i] != typeof obj[i]) return false;
+        if(typeof this[i] == 'object'){
+            if(!this[i].deepEquals(obj[i])) return false;
+        }
+        else{
+            if(this[i] != obj[i]) if(!Number.isNaN(this[i]) || !Number.isNaN(obj[i])) return false;
+        }
+    }
+    return true;
+}
+Object.defineProperty(Object.prototype, "deepEquals", {enumerable: false});
+
 // these methods are not complete!!! they just cover hex entities
 String.prototype.encodeHTML = function(){
     return this.replace(/[^ \{\|\}~!#\$%\(\)\*\+,-./\d:;\=\?@ABCDEFGHIJKLMNOPQRSTUVWXYZ\[\]\\\^_]/gi, (match) => '&#x'+match.charCodeAt(0).toString(16)+';');
@@ -786,7 +803,7 @@ class Entity { // abstract
         this.dom.gallery.style.display = 'none';
         this.dom.pureText.style.display = 'none';
         this.dom.name.innerHTML = '';
-        this.dom.input.name = this.dom.name.appendChild(document.createNode('input',{value: this.name.decodeHTML(), onclick: e => e.stopPropagation()}));
+        this.dom.input.name = this.dom.name.appendChild(document.createNode('input',{className:'edit_name', value: this.name.decodeHTML(), onclick: e => e.stopPropagation()}));
 
         this.dom.grid.style.display = '';
         this.dom.descriptionLabel.style.display = '';
@@ -1286,6 +1303,24 @@ class ItemEntity extends Entity {
     constructor(id, parent, storyline){
         super(id, parent, storyline);
         objectSets.ItemEntity.set(this.id, this);
+        
+        this.dom.amount = document.createNode('input',{
+            type: 'number',
+            min: 0,
+            step: 1,
+            onchange: ()=>{
+                let value = parseInt(this.dom.amount.value);
+                if(Number.isNaN(value) || value == this.amount || value < 0 || !Number.isInteger(value)){
+                    this.dom.amount.value = this.amount;
+                    return;
+                }
+                this.amount = value;
+                socket.emit('updateData','ItemEntity',this.id,{amount:value});
+            },
+            onclick: e=>e.stopPropagation()
+        });
+        this.dom.title.insertBefore(this.dom.amount, this.dom.name);
+        this.dom.title.insertBefore(document.createTextNode(' '), this.dom.name);
     }
     
     async init(){
@@ -1321,6 +1356,7 @@ class ItemEntity extends Entity {
 
         if(data.amount != undefined && this.amount != data.amount){
             this.amount = data.amount;
+            this.dom.amount.value = this.amount;
         }
     }
 
@@ -1354,6 +1390,7 @@ class ItemEffectEntity extends Entity {
     }
 
     async update(data){
+        console.log(data);
         if(this.editing){
             function recursiveUpdateDataCash(cash, newData){
                 for(let i in newData){
@@ -1378,10 +1415,10 @@ class ItemEffectEntity extends Entity {
 
         let newObjectInits = [];
 
-        if(data.items && !this.items?.equals(data.items)){
+        if(data.items && !this.items?.deepEquals(data.items)){
             this.items = data.items;
-            for(let id of this.items){
-                if(!objectSets.ItemEntity.get(id)) newObjectInits.push((new ItemEntity(id, this, this.storyline)).init());
+            for(let x of this.items){
+                if(!objectSets.ItemEntity.get(x.item)) newObjectInits.push((new ItemEntity(x.item, this, this.storyline)).init());
             }
         }
 
@@ -1389,7 +1426,11 @@ class ItemEffectEntity extends Entity {
     }
 
     getItems(){
-        return this.items.map(id => objectSets.ItemEntity.get(id));
+        return this.items.map(x => objectSets.ItemEntity.get(x.item));
+    }
+
+    getItemsWithMultipliers(){
+        return this.items.map(x => ({mult:x.mult,item:objectSets.ItemEntity.get(x.item)}));
     }
 
     delete(){
@@ -1958,8 +1999,8 @@ class BoardEntity {
 })();
 
 /* TODO/NOTES:
-- edit images (show preview, order, delete, add and/or upload via own gallery menu)
-- value system
+- entity specifics: cells display system, itemEffects edit items, skills (learned and requirements)
+- value system (show value of itemEffects)
 - map system
 
 - id system in MongoDB
