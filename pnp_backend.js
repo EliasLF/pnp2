@@ -1111,6 +1111,11 @@ io.on('connection', (socket) => {
             
             case 'SkillEntity': 
                 if(data.learned != undefined) tmpData.learned = Boolean(data.learned);
+
+                if(data.requirements != undefined){
+                    tmpData.requirements = data.requirements;
+                    if(typeof tmpData.requirements != 'string') return error('requirements must be a string');
+                }
                 break;
             
             case 'CellEntity': 
@@ -1275,6 +1280,7 @@ io.on('connection', (socket) => {
         }
 
         if(collection == 'PlayerEntity'){
+            if(tmpData.name == 'this') return error('\'this\' is an invalid name for this type of entity');
             tmpData.reference_name = tmpData.name.decodeHTML().toLowerCase().replace(/ /g,'_');
             tmpData.storyline = parentId;
             if(await mongodb.collection(collection).findOne({reference_name: tmpData.reference_name, storyline: tmpData.storyline}))
@@ -1340,7 +1346,7 @@ io.on('connection', (socket) => {
                 if(template?.items != undefined && (!templateMask || (templateMask.items ?? templateMaskDefault))){
                     tmpData.items = [];
                     if(templateItemsIdMap){
-                        for(let itemId of template.items) if(templateItemsIdMap.get(itemId) != undefined) tmpData.items.push(templateItemsIdMap.get(itemId));
+                        for(let itemId of template.items) if(templateItemsIdMap.get(itemId) != undefined) tmpData.items.push(templateItemsIdMap.get(itemId) ?? itemId);
                     }
                 }
                 else if(data.items == undefined) tmpData.items = [];
@@ -1353,6 +1359,12 @@ io.on('connection', (socket) => {
                 if(template?.learned != undefined && (!templateMask || (templateMask.learned ?? templateMaskDefault))) 
                     tmpData.learned = Boolean(template.learned);
                 else tmpData.learned = Boolean(data.learned);
+
+                if(template?.requirements != undefined && (!templateMask || (templateMask.requirements ?? templateMaskDefault))) 
+                    tmpData.requirements = template.requirements;
+                else if(data.requirements == undefined) tmpData.requirements = '';
+                else tmpData.requirements = data.requirements;
+                if(typeof tmpData.requirements != 'string') return error('requirements must be a string');
                 break;
             
             case 'CellEntity': 
@@ -1363,15 +1375,17 @@ io.on('connection', (socket) => {
                 for(let property of ['items','itemEffects','skills','cells']){
                     tmpData[property] = {};
 
-                    if(template?.[property]?.entities && (!templateMask || (templateMask[property]?.entities ?? templateMaskDefault))) 
-                        tmpData[property].entities = []; 
+                    if(template?.[property]?.entities && (!templateMask || (typeof templateMask[property] != 'object' && templateMask[property]) || 
+                        (templateMask[property]?.entities ?? templateMaskDefault))) 
+                            tmpData[property].entities = []; 
                     else if(data[property]?.entities == undefined) tmpData[property].entities = [];
                     else tmpData[property].entities = data[property].entities;
                     if(!Array.isArray(tmpData[property].entities) || tmpData[property].entities.some(x => !Number.isInteger(x)))
                         return error(property+'.entities must be an array of numerical ids');
                     
-                    if(template?.[property]?.categories && (!templateMask || (templateMask[property]?.categories ?? templateMaskDefault))) 
-                        tmpData[property].categories = []; 
+                    if(template?.[property]?.categories && (!templateMask || (typeof templateMask[property] != 'object' && templateMask[property]) || 
+                        (templateMask[property]?.categories ?? templateMaskDefault))) 
+                            tmpData[property].categories = []; 
                     else if(data[property]?.categories == undefined) tmpData[property].categories = [];
                     else tmpData[property].categories = data[property].categories;
                     if(!Array.isArray(tmpData[property].categories) || tmpData[property].categories.some(x => !Number.isInteger(x)))
@@ -1548,7 +1562,8 @@ io.on('connection', (socket) => {
                     }
                 }
 
-                if(template?.[property]?.entities && (!templateMask || (templateMask[property]?.entities ?? templateMaskDefault))){
+                if(template?.[property]?.entities && (!templateMask || (typeof templateMask[property] != 'object' && templateMask[property]) || 
+                        (templateMask[property]?.entities ?? templateMaskDefault))) {
                     if(template[property].entities.length > 0){
                         // to keep order: save all previous promises and wait everytime before registering with parent until all others finished
                         let keepOrderPromises = [];
@@ -1569,7 +1584,8 @@ io.on('connection', (socket) => {
                     }
                 }
                 
-                if(template?.[property]?.categories && (!templateMask || (templateMask[property]?.categories ?? templateMaskDefault))){
+                if(template?.[property]?.categories && (!templateMask || (typeof templateMask[property] != 'object' && templateMask[property]) || 
+                        (templateMask[property]?.categories ?? templateMaskDefault))) {
                     if(template[property].categories.length > 0){
                         // to keep order: save all previous promises and wait everytime before registering with parent until all others finished
                         let keepOrderPromises = [];

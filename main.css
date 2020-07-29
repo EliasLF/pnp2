@@ -72,6 +72,7 @@ body{
 button{
     background-color: transparent;
     color: inherit;
+    transition: var(--transition-time);
 }
 
 button:hover{
@@ -82,6 +83,7 @@ input, select, textarea{
     background-color: transparent;
     color: inherit;
     border: 1px solid var(--border-highlight-level1);
+    transition: var(--transition-time);
 }
 
 input[type=number]{
@@ -298,11 +300,19 @@ a{
 .first_content_image{
     float:left;
     width: 50%;
-    max-width: 500px;
+    max-width: 400px;
     height: auto;
     margin-right: 10px;
     margin-bottom: 10px;
 }
+
+@media screen and (max-width: 500px) {
+    .first_content_image{
+        width:100%;
+        margin-right: 0;
+        max-width: none;
+    }
+  }
 
 .content_gallery{
     overflow: auto;
@@ -376,21 +386,6 @@ a{
     transition: 0s!important;
 }
 
-.edit_image_add_wrapper{
-    text-align: center;
-}
-
-.edit_image_add{
-    display: inline-block;
-    background-color: var(--font-color);
-    color: var(--backgrnd-color1);
-    width: 30px;
-    height: 30px;
-    line-height: 30px;
-    border-radius: 15px;
-    cursor: pointer;
-}
-
 .edit_image{
     height: 100px;
     cursor: move;
@@ -414,4 +409,100 @@ a{
     text-align: center;
     line-height: 12px;
     cursor: pointer;
+}
+
+.skill_requirements{
+    font-style: italic;
+}
+
+.entity_pure_text{
+    display: inline-block;
+}
+
+#add_menu{
+    background-color: var(--backgrnd-color2);
+    border: 1px solid var(--border-highlight-level1);
+    position: absolute;
+    cursor: default;
+    z-index: 100;
+    display: none;
+}
+
+#add_menu>div{
+    border-top: 1px solid var(--border-highlight-level1);
+    padding: 5px 8px;
+    transition: var(--transition-time);
+}
+
+#add_menu>div:hover{
+    background-color: var(--backgrnd-color2-hover);
+}
+
+#add_menu>div:first-child{
+    border: none;
+}
+
+
+.add_element_wrapper{
+    text-align: center;
+    margin-top: 7px;
+}
+
+.add_element{
+    text-align: center;
+    display: inline-block;
+    width: 30px;
+    height: 30px;
+    line-height: 30px;
+    border-radius: 15px;
+    border: 1px solid;
+    cursor: pointer;
+    transition: var(--transition-time);
+}
+
+.add_element:hover{
+    background-color: rgba(0,0,0,0.1);
+}
+
+.add_element_category{
+    float: right;
+    margin-top: -4.5px;
+    margin-bottom: -4.5px;
+    margin-left: 10px;
+}
+
+.add_popup_wrapper{
+    background-color: var(--backgrnd-color2);
+    border: 1px solid var(--border-highlight-level1);
+    text-align: left;
+    padding: 10px;
+}
+
+.add_popup_wrapper h3{
+    margin-top: 0;
+}
+
+.add_popup_wrapper::after{
+    content: "";
+    display: block;
+    clear: both;
+}
+
+.add_popup_grid{
+    display: grid;
+    grid-template-columns: auto 1fr;
+    margin-bottom: 10px;
+}
+
+.add_popup_grid>div{
+    margin-top: 5px;
+}
+
+.add_commit_button{
+    float: right;
+    margin-left: 10px;
+}
+
+.itemeffect_edit_item input{
+    margin-right: 7px;
 }

@@ -177,6 +177,10 @@ function parseMarkup(string){
     .replace(/->/g,'&#8594;'));
 }
 
+function getReferenceName(name){
+    return name.toLowerCase().replace(/[°\^\!"%&\/\(\)=\?\{\}\[\]\\\*\+\~'#\-:.;,\<\>\|]/g,'').replace(/ +/g,'_');
+}
+
 async function uploadImage(file, tags){
     var xhttp;
     xhttp=new XMLHttpRequest();
@@ -252,7 +256,7 @@ async function socketRequestDataImages(id, upperBound){
     }));
 }
 
-
+var $ = {};
 var currentlyEditing = null;
 var objectSets = {
     Storyline: new Map(),
@@ -279,6 +283,8 @@ var storylineSelection = storylineSelectionWrapper.appendChild(document.createNo
     if(this.value == currentStoryline.id) return;
     if(!objectSets.Storyline.get(parseInt(this.value))) await (new Storyline(parseInt(this.value))).init();
     currentStoryline = objectSets.Storyline.get(parseInt(this.value));
+    $ = {};
+    for(let x of currentStoryline.getPlayerEntities()) $[x.referenceName] = x;
     document.getElementById('menu_storyline').onclick();
 }},{marginTop:'10px'}));
 var storylineSelectionOptions = new Map();
@@ -295,6 +301,32 @@ socket.on('serveData_storylineNames', names => {
     await loadPromises.socket.loaded;
     socket.emit('requestData_storylineNames');
 })();
+
+var addMenu = {
+    opened: false,
+
+    open(x,y,...fields){
+        if(!this.dom) return;
+        this.dom.innerHTML = '';
+        for(let [name, reaction] of fields){
+            this.dom.appendChild(document.createNode('div',{innerHTML:name,onclick:reaction}));
+        }
+        this.dom.style.display = 'initial';
+        this.opened = true;
+        this.dom.style.left = this.dom.style.top = 0;
+        if(document.body.getWidth()<x+this.dom.offsetWidth) this.dom.style.left = (document.body.getWidth()-this.dom.offsetWidth-10) + 'px';
+        else this.dom.style.left = x + 'px';
+        if(document.body.getHeight()<y+this.dom.offsetHeight) this.dom.style.top = (document.body.getHeight()-this.dom.offsetHeight-10) + 'px';
+        else this.dom.style.top = y + 'px';
+    },
+
+    close(){
+        if(!this.dom) return;
+        if(!this.opened) return;
+        this.dom.style.display = '';
+        this.opened = false;
+    }
+};
 
 
 const popup = {
@@ -606,8 +638,8 @@ class Entity { // abstract
         this.dom.name = this.dom.title.appendChild(document.createNode('span'));
 
         this.dom.main = this.dom.root.appendChild(document.createNode('div',_,{display: 'none', marginTop:'20px'}));
-        this.dom.pureText = this.dom.main.appendChild(document.createNode('div'));
         this.dom.firstImage = this.dom.main.appendChild(document.createNode('img',{loading:'lazy', className:'first_content_image'}));
+        this.dom.pureText = this.dom.main.appendChild(document.createNode('div',{className:'entity_pure_text'}));
 
         this.dom.text = this.dom.main.appendChild(document.createNode('div',{className:'content_text'}));
         this.dom.grid = this.dom.text.appendChild(document.createNode('div',{className:'content_grid'}));
@@ -620,8 +652,8 @@ class Entity { // abstract
         this.dom.imageEdit = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
         this.dom.imageEditSection = this.dom.imageEdit.appendChild(document.createNode('div'));
         let $this = this;
-        this.dom.imageEdit.appendChild(document.createNode('div',{className:'edit_image_add_wrapper'}))
-        .appendChild(document.createNode('div',{innerHTML:'+', className:'edit_image_add', onclick: async function(){
+        this.dom.imageEdit.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: async function(){
             let imgId = await Entity.openImgMenuPopup();
             if(imgId != undefined && !$this.editImages.includes(imgId)){
                 $this.editImages.push(imgId);
@@ -659,7 +691,7 @@ class Entity { // abstract
         this.dom.main.style.display = this.open ? '' : 'none';
     }
 
-    async update(data){
+    async update(data, changed){
         if(this.editing){
             function recursiveUpdateDataCash(cash, newData){
                 for(let i in newData){
@@ -680,8 +712,6 @@ class Entity { // abstract
 
         this.updateDataCash = null;
 
-        let changed = false;
-
         if(data.protected!=undefined && this.protected != data.protected){
             this.protected = data.protected;
             this.dom.root.style.display = (this.protected && !this.storyline.gmValidated) ? 'none' : '';
@@ -689,7 +719,7 @@ class Entity { // abstract
 
         if(data.name!=undefined && this.name != data.name){
             this.name = data.name;
-            this.referenceName = this.name.decodeHTML().toLowerCase().replace(/ /g, '_');
+            this.referenceName = getReferenceName(this.name.decodeHTML());
             this.dom.name.innerHTML = this.name;
         }
 
@@ -761,8 +791,8 @@ class Entity { // abstract
         }
 
         // if only description and nothing else display pureText instead of grid format
-        if(this.dom.firstImage.style.display == 'none' && this.dom.gallery.style.display == 'none' && 
-                Array.from(this.dom.grid.children).slice(2).every(x => x.style.display == 'none')){
+        if(Array.from(this.dom.grid.children).every(x => 
+                x.style.display == 'none' || x == this.dom.descriptionLabel || x == this.dom.description)){
             this.dom.grid.style.display = 'none';
             this.dom.pureText.style.display = '';
         }
@@ -821,12 +851,13 @@ class Entity { // abstract
 
         this.dom.input.saveEdit.style.display = 'initial';
         this.dom.input.cancelEdit.style.display = 'initial';
+        this.toggleOpen(true);
     }
 
-    saveEdit(){
+    saveEdit(changed){
         this.cancelEdit();
 
-        let changed = {};
+        if(!changed) changed = {};
 
         if(this.dom.input.name.value != this.name.decodeHTML()) changed.name = this.dom.input.name.value.encodeHTML();
 
@@ -968,6 +999,11 @@ class PlayerEntity extends Entity {
         super(id, parent, parent);
         this.currentOpenTab = 'info';
         objectSets.PlayerEntity.set(this.id, this);
+        this.item = {};
+        this.effect = {};
+        this.skill = {};
+        this.cell = {};
+
         this.items = {};
         this.itemEffects = {};
         this.skills = {};
@@ -979,7 +1015,7 @@ class PlayerEntity extends Entity {
         this.dom.menuTab = document.createNode('div', {className:'secondary_menu_tab',onclick: ()=>this.storyline.openPlayer(this.id)});
         this.dom.menuTabs = {};
         this.dom.menuTabs.info = document.createNode('div', {innerHTML:'Info', onclick: ()=>this.openTab('info')});
-        this.dom.menuTabs.cells = document.createNode('div', {innerHTML:'Values', onclick: ()=>this.openTab('cells')});
+        this.dom.menuTabs.cells = document.createNode('div', {innerHTML:'Cells', onclick: ()=>this.openTab('cells')});
         this.dom.menuTabs.items = document.createNode('div', {innerHTML:'Items', onclick: ()=>this.openTab('items')});
         this.dom.menuTabs.itemEffects = document.createNode('div', {innerHTML:'Effects', onclick: ()=>this.openTab('itemEffects')});
         this.dom.menuTabs.skills = document.createNode('div', {innerHTML:'Skills', onclick: ()=>this.openTab('skills')});
@@ -994,6 +1030,14 @@ class PlayerEntity extends Entity {
             id:'PlayerEntity_'+this.id+'_items_entities', 
             className:'entity_container'
         }));
+        this.dom.items.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
+            addMenu.open(e.pageX,e.pageY,
+                ['Item',()=>this.openAddPopup('items', false)],
+                ['Category',()=>this.openAddPopup('items', true)]
+            );
+            e.stopPropagation();
+        }}));
 
         this.dom.itemEffects = {};
         this.dom.itemEffects.root = document.createNode('div');
@@ -1005,6 +1049,14 @@ class PlayerEntity extends Entity {
             id:'PlayerEntity_'+this.id+'_itemEffects_entities', 
             className:'entity_container'
         }));
+        this.dom.itemEffects.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
+            addMenu.open(e.pageX,e.pageY,
+                ['Item Effect',()=>this.openAddPopup('itemEffects', false)],
+                ['Category',()=>this.openAddPopup('itemEffects', true)]
+            );
+            e.stopPropagation();
+        }}));
 
         this.dom.cells = {};
         this.dom.cells.root = document.createNode('div');
@@ -1016,6 +1068,17 @@ class PlayerEntity extends Entity {
             id:'PlayerEntity_'+this.id+'_cells_entities', 
             className:'entity_container'
         }));
+        this.dom.cells.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
+            addMenu.open(e.pageX,e.pageY,
+                ['Dynamic Value',()=>alert('Dynamic Value')],
+                ['Constant Value',()=>alert('Constant Value')],
+                ['Control',()=>alert('Control')],
+                ['Text/Image',()=>alert('Text/Image')],
+                ['Category',()=>alert('Category')]
+            );
+            e.stopPropagation();
+        }}));
 
         this.dom.skills = {};
         this.dom.skills.root = document.createNode('div');
@@ -1027,6 +1090,14 @@ class PlayerEntity extends Entity {
             id:'PlayerEntity_'+this.id+'_skills_entities', 
             className:'entity_container'
         }));
+        this.dom.skills.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
+            addMenu.open(e.pageX,e.pageY,
+                ['Skill',()=>this.openAddPopup('skills', false)],
+                ['Category',()=>this.openAddPopup('skills', true)]
+            );
+            e.stopPropagation();
+        }}));
 
         this.sortables = {};
         this.sortables.entities = new Sortable.default([
@@ -1148,17 +1219,21 @@ class PlayerEntity extends Entity {
         this.updateDataCash = null;
 
         let changedName = (data.name!=undefined && this.name != data.name);
+        if(this.storyline == currentStoryline && changedName) delete $[this.referenceName];
 
         await super.update(data);
         
-        if(changedName) this.dom.menuTab.innerHTML = this.name;
+        if(changedName){
+            this.dom.menuTab.innerHTML = this.name;
+            $[this.referenceName] = this;
+        }
 
         let newObjectInits = [];
 
         if(data.items?.entities && !this.items?.entities?.equals(data.items.entities)){
             this.items.entities = data.items.entities;
             for(let id of this.items.entities){
-                if(!objectSets.ItemEntity.get(id)) newObjectInits.push((new ItemEntity(id, this, this.storyline)).init());
+                if(!objectSets.ItemEntity.get(id)) newObjectInits.push((new ItemEntity(id, this, this.storyline, this)).init());
             }
             this.dom.items.entities.innerHTML = '';
             for(let entity of this.getEntities('items')) this.dom.items.entities.appendChild(entity.dom.root);
@@ -1166,7 +1241,7 @@ class PlayerEntity extends Entity {
         if(data.items?.categories && !this.items?.categories?.equals(data.items.categories)){
             this.items.categories = data.items.categories;
             for(let id of this.items.categories){
-                if(!objectSets.ItemCategory.get(id)) newObjectInits.push((new ItemCategory(id, this, this.storyline)).init());
+                if(!objectSets.ItemCategory.get(id)) newObjectInits.push((new ItemCategory(id, this, this.storyline, this)).init());
             }
             this.dom.items.categories.innerHTML = '';
             for(let categoriey of this.getCategories('items')) this.dom.items.categories.appendChild(categoriey.dom.root);
@@ -1175,7 +1250,7 @@ class PlayerEntity extends Entity {
         if(data.itemEffects?.entities && !this.itemEffects?.entities?.equals(data.itemEffects.entities)){
             this.itemEffects.entities = data.itemEffects.entities;
             for(let id of this.itemEffects.entities){
-                if(!objectSets.ItemEffectEntity.get(id)) newObjectInits.push((new ItemEffectEntity(id, this, this.storyline)).init());
+                if(!objectSets.ItemEffectEntity.get(id)) newObjectInits.push((new ItemEffectEntity(id, this, this.storyline, this)).init());
             }
             this.dom.itemEffects.entities.innerHTML = '';
             for(let entity of this.getEntities('itemEffects')) this.dom.itemEffects.entities.appendChild(entity.dom.root);
@@ -1183,7 +1258,7 @@ class PlayerEntity extends Entity {
         if(data.itemEffects?.categories && !this.itemEffects?.categories?.equals(data.itemEffects.categories)){
             this.itemEffects.categories = data.itemEffects.categories;
             for(let id of this.itemEffects.categories){
-                if(!objectSets.ItemEffectCategory.get(id)) newObjectInits.push((new ItemEffectCategory(id, this, this.storyline)).init());
+                if(!objectSets.ItemEffectCategory.get(id)) newObjectInits.push((new ItemEffectCategory(id, this, this.storyline, this)).init());
             }
             this.dom.itemEffects.categories.innerHTML = '';
             for(let categoriey of this.getCategories('itemEffects')) this.dom.itemEffects.categories.appendChild(categoriey.dom.root);
@@ -1192,7 +1267,7 @@ class PlayerEntity extends Entity {
         if(data.skills?.entities && !this.skills?.entities?.equals(data.skills.entities)){
             this.skills.entities = data.skills.entities;
             for(let id of this.skills.entities){
-                if(!objectSets.SkillEntity.get(id)) newObjectInits.push((new SkillEntity(id, this, this.storyline)).init());
+                if(!objectSets.SkillEntity.get(id)) newObjectInits.push((new SkillEntity(id, this, this.storyline, this)).init());
             }
             this.dom.skills.entities.innerHTML = '';
             for(let entity of this.getEntities('skills')) this.dom.skills.entities.appendChild(entity.dom.root);
@@ -1200,7 +1275,7 @@ class PlayerEntity extends Entity {
         if(data.skills?.categories && !this.skills?.categories?.equals(data.skills.categories)){
             this.skills.categories = data.skills.categories;
             for(let id of this.skills.categories){
-                if(!objectSets.SkillCategory.get(id)) newObjectInits.push((new SkillCategory(id, this, this.storyline)).init());
+                if(!objectSets.SkillCategory.get(id)) newObjectInits.push((new SkillCategory(id, this, this.storyline, this)).init());
             }
             this.dom.skills.categories.innerHTML = '';
             for(let categoriey of this.getCategories('skills')) this.dom.skills.categories.appendChild(categoriey.dom.root);
@@ -1209,7 +1284,7 @@ class PlayerEntity extends Entity {
         if(data.cells?.entities && !this.cells?.entities?.equals(data.cells.entities)){
             this.cells.entities = data.cells.entities;
             for(let id of this.cells.entities){
-                if(!objectSets.CellEntity.get(id)) newObjectInits.push((new CellEntity(id, this, this.storyline)).init());
+                if(!objectSets.CellEntity.get(id)) newObjectInits.push((new CellEntity(id, this, this.storyline, this)).init());
             }
             this.dom.cells.entities.innerHTML = '';
             for(let entity of this.getEntities('cells')) this.dom.cells.entities.appendChild(entity.dom.root);
@@ -1217,13 +1292,15 @@ class PlayerEntity extends Entity {
         if(data.cells?.categories && !this.cells?.categories?.equals(data.cells.categories)){
             this.cells.categories = data.cells.categories;
             for(let id of this.cells.categories){
-                if(!objectSets.CellCategory.get(id)) newObjectInits.push((new CellCategory(id, this, this.storyline)).init());
+                if(!objectSets.CellCategory.get(id)) newObjectInits.push((new CellCategory(id, this, this.storyline, this)).init());
             }
             this.dom.cells.categories.innerHTML = '';
             for(let categoriey of this.getCategories('cells')) this.dom.cells.categories.appendChild(categoriey.dom.root);
         }
 
         await Promise.all(newObjectInits);
+
+        return this;
     }
 
     openTab(tab){
@@ -1260,12 +1337,12 @@ class PlayerEntity extends Entity {
         }
     }
 
-    getAllDescendantsReferenceNames(property){
-        let result = new Map();
-        for(let x of this.getEntities(property)) result.set(x.referenceName, x);
+    getAllDescendants(property){
+        let result = new Set();
+        for(let x of this.getEntities(property)) result.add(x);
 
         function addSubCategory(category){
-            for(let x of category.getEntities()) result.set(x.referenceName, x);
+            for(let x of category.getEntities()) result.add(x);
             for(let x of category.getCategories()) addSubCategory(x);
         }
 
@@ -1297,14 +1374,159 @@ class PlayerEntity extends Entity {
         this.setEditing(false);
         socket.emit('removeData','PlayerEntity',this.id);
     }
+
+    async openAddPopup(property, category, parentCategory, cellType){
+        var wrapper = document.createNode('div',{className:'add_popup_wrapper',onclick: e=> e.stopPropagation()});
+
+        wrapper.appendChild(document.createNode('h3',{
+            innerHTML:'Create new '+(property == 'items' ? 'item' : property == 'itemEffects' ? 'item effect' : property == 'skills' ? 'skill' : 'cell') + (category ? ' category' : '')
+        }));
+
+        let grid = wrapper.appendChild(document.createNode('div',{className:'add_popup_grid'}));
+        grid.appendChild(document.createNode('div',{innerHTML:'Name:&nbsp;'}));
+        let nameInput = grid.appendChild(document.createNode('div')).appendChild(document.createNode('input',{onkeyup: e=>{
+            if(e.key == 'Enter') commit();
+        }}));
+
+        var templateSelect = {};
+        var templateMask = {};
+
+        if(!category){
+            grid.appendChild(document.createNode('div',{innerHTML:'Template:&nbsp;'}));
+            let templateSelectSection = grid.appendChild(document.createNode('div'));
+
+            templateSelect.storyline = templateSelectSection.appendChild(document.createNode('select', {onchange: async function(){
+                templateSelect.player.innerHTML = '';
+                templateSelect.player.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+                if(this.value != 'none' && this.value != ''){
+                    let storyline = objectSets.Storyline.get(parseInt(this.value));
+                    if(!storyline) storyline = await (new Storyline(parseInt(this.value))).init();
+                    for(let x of storyline.getPlayerEntities()) templateSelect.player.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+                }
+                templateSelect.player.onchange();
+            }}));
+            templateSelect.storyline.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+            for(let [id,obj] of storylineSelectionOptions.entries()) templateSelect.storyline.appendChild(document.createNode('option',{innerHTML:obj.innerHTML,value:id}));
+            templateSelect.storyline.value = this.storyline.id;
+
+            templateSelect.player = templateSelectSection.appendChild(document.createNode('select', {onchange: async function(){
+                templateSelect.element.innerHTML = '';
+                templateSelect.element.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+                if(this.value != 'none' && this.value != ''){
+                    let player = objectSets.PlayerEntity.get(parseInt(this.value));
+                    if(!player) return;
+                    for(let x of player.getAllDescendants(property)) templateSelect.element.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+                }
+                templateSelect.element.onchange();
+            }}));
+
+            templateSelect.element = templateSelectSection.appendChild(document.createNode('select', {onchange: function(){
+                if(this.value == 'none' || this.value == '') templateMaskSection.style.display = 'none';
+                else templateMaskSection.style.display = '';
+            }}));
+
+            var templateMaskSection = templateSelectSection.appendChild(document.createNode('div'));
+            var checkAll = templateMaskSection.appendChild(document.createNode('input',{type:'checkbox',checked:true,onchange: function(){
+                for(let x of Object.values(templateMask)) x.checked = this.checked;
+            }}));
+            templateMaskSection.appendChild(document.createNode('b',{innerHTML:'&nbsp;All'}));
+            templateMaskSection.appendChild(document.createNode('br'));
+
+
+            function addMaskCheckbox(name, referenceName){
+                templateMask[referenceName] = templateMaskSection.appendChild(document.createNode('input',{type:'checkbox',checked:true,onchange: function(){
+                    if(!this.checked) checkAll.checked = false;
+                    else if(Object.values(templateMask).every(x => x.checked)) checkAll.checked = true;
+                }}));
+                templateMaskSection.appendChild(document.createNode('span',{innerHTML:'&nbsp;'+name}));
+                templateMaskSection.appendChild(document.createNode('br'));
+            }
+
+            addMaskCheckbox('Description','description');
+            addMaskCheckbox('Images','images');
+            addMaskCheckbox('Map data','coordinates');
+            switch(property){
+                case 'items':
+                    addMaskCheckbox('Amount','amount');
+                    break;
+                case 'itemEffects':
+                    addMaskCheckbox('Items','items');
+                    break;
+                case 'skills':
+                    addMaskCheckbox('Requirements','requirements');
+                    addMaskCheckbox('Learned','learned');
+                    break;
+                case 'cells':
+                    break;
+            }
+
+            await templateSelect.storyline.onchange();
+            templateSelect.player.value = this.id;
+            await templateSelect.player.onchange();
+        }
+
+        var commit = ()=>{
+            if(!nameInput.value) return alert('The name field must not be empty.');
+            let template;
+            let mask;
+            if(!category){
+                if(nameInput.value == 'this') 
+                    return alert('\'this\' is a reserved word and cannot be used as a name for an entity of this type.\nHowever, it is fine to use it as part of a name.');
+                switch(property){
+                    case 'items':
+                        if(this.item[getReferenceName(nameInput.value)]) 
+                            return alert('There is already an item with an equivalent name within this player.');
+                        break;
+                    case 'itemEffects':
+                        if(this.effect[getReferenceName(nameInput.value)]) 
+                            return alert('There is already an item with an equivalent name within this player.');
+                        break;
+                    case 'skills':
+                        if(this.skill[getReferenceName(nameInput.value)]) 
+                            return alert('There is already an item with an equivalent name within this player.');
+                        break;
+                    case 'cells':
+                        if(this.cell[getReferenceName(nameInput.value)]) 
+                            return alert('There is already an item with an equivalent name within this player.');
+                        break;
+                }
+                
+                if(templateSelect.element.value != 'none' && templateSelect.element.value != ''){
+                    template = parseInt(templateSelect.element.value);
+                    mask = {};
+                    for(let i in templateMask) mask[i] = templateMask[i].checked;
+                }
+            }
+
+            socket.emit(
+                'addData',
+                property.slice(0,1).toUpperCase() + property.slice(1,-1) + (category ? 'Category' : 'Entity'),
+                {name:nameInput.value},
+                {
+                    loose: !Boolean(parentCategory),
+                    parentId: parentCategory ? parentCategory.id : this.id,
+                    template,
+                    templateMask: mask
+                }
+            );
+
+            popup.close();
+        }
+
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Create', className:'add_commit_button', onclick: ()=>commit()}));
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Cancel', className:'add_commit_button', onclick: ()=>popup.close()}));
+        
+        popup.open([wrapper]);
+    }
 }
 
 class ItemEntity extends Entity {
-    constructor(id, parent, storyline){
+    constructor(id, parent, storyline, player){
         super(id, parent, storyline);
+        this.player = player;
         objectSets.ItemEntity.set(this.id, this);
         
-        this.dom.amount = document.createNode('input',{
+        this.dom.amount = this.dom.title.insertBefore(document.createNode('input',{
             type: 'number',
             min: 0,
             step: 1,
@@ -1318,9 +1540,17 @@ class ItemEntity extends Entity {
                 socket.emit('updateData','ItemEntity',this.id,{amount:value});
             },
             onclick: e=>e.stopPropagation()
-        });
-        this.dom.title.insertBefore(this.dom.amount, this.dom.name);
+        }), this.dom.name);
         this.dom.title.insertBefore(document.createTextNode(' '), this.dom.name);
+
+
+        this.editEffects = [];
+
+        this.dom.effectsLabel = this.dom.grid.appendChild(document.createNode('div',{innerHTML: 'Effects:'},{display:'none'}));
+        this.dom.effectsWrapper = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
+        this.dom.effects = this.dom.effectsWrapper.appendChild(document.createNode('div'));
+        this.dom.effectsWrapper.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: ()=>this.addEditEffectElement()}));
     }
     
     async init(){
@@ -1352,18 +1582,25 @@ class ItemEntity extends Entity {
 
         this.updateDataCash = null;
 
+        let changedName = (data.name!=undefined && this.name != data.name);
+        if(changedName) delete this.player.item[this.referenceName];
+
         await super.update(data);
+        
+        if(changedName) this.player.item[this.referenceName] = this;
 
         if(data.amount != undefined && this.amount != data.amount){
             this.amount = data.amount;
             this.dom.amount.value = this.amount;
         }
+
+        return this;
     }
 
     getItemEffects(){
         const result = [];
         for(let x of objectSets.ItemEffectEntity.values()){
-            if(x.items.includes(this.id)) result.push(x);
+            if(x.items.some(y => y.item == this.id)) result.push({effect:x, mult:x.items.find(y => y.item == this.id)?.mult});
         }
         return result;
     }
@@ -1373,11 +1610,124 @@ class ItemEntity extends Entity {
         this.setEditing(false);
         socket.emit('removeData','ItemEntity',this.id);
     }
+
+    edit(){
+        super.edit();
+        this.dom.amount.style.display = 'none';
+        
+        this.dom.effectsLabel.style.display = '';
+        this.dom.effectsWrapper.style.display = '';
+        this.editEffects = [];
+        this.dom.effects.innerHTML = '';
+        for(let x of this.getItemEffects()) this.addEditEffectElement(x.effect, x.mult);
+        for(let x of this.editEffects) x.player.onchange();
+    }
+
+    reloadDOMVisibility(){
+        this.dom.effectsLabel.style.display = 'none';
+        this.dom.effectsWrapper.style.display = 'none';
+
+        super.reloadDOMVisibility();
+        this.dom.amount.style.display = '';
+    }
+
+    addEditEffectElement(effect, multiplier){
+        let inputs = {};
+        let root = this.dom.effects.appendChild(document.createNode('div',{className:'itemeffect_edit_item'}));
+        inputs.multiplier = root.appendChild(document.createNode('input',{
+            type: 'number',
+            step: 'any',
+            min: 0,
+            value: multiplier ? multiplier : 0
+        }));
+
+        inputs.player = root.appendChild(document.createNode('select', {onchange: ()=>{
+            let value = inputs.effect.value;
+            inputs.effect.innerHTML = '';
+            inputs.effect.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+            if(inputs.player.value == 'none' || inputs.player.value == '') return;
+            let player = objectSets.PlayerEntity.get(parseInt(inputs.player.value));
+            for(let x of player.getAllDescendants('itemEffects')){
+                if(!this.editEffects.map(x => parseInt(x.effect.value)).includes(x.id))
+                    inputs.effect.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+            }
+            inputs.effect.value = value;
+            if(!inputs.effect.value) inputs.effect.value = 'none';
+        }}));
+        for(let x of currentStoryline.getPlayerEntities()) inputs.player.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+
+        inputs.effect = root.appendChild(document.createNode('select',{onchange:()=>{
+            for(let x of this.editEffects) x.player.onchange();
+        }}));
+
+        if(effect){
+            inputs.player.value = effect.player.id;
+            inputs.player.onchange();
+            inputs.effect.value = effect.id;
+        }
+        else{
+            inputs.player.value = this.player.id;
+            inputs.player.onchange();
+        }
+
+        this.editEffects.push(inputs);
+        this.dom.effects.appendChild(root);
+    }
+
+    saveEdit(){
+        let changed = {};
+
+        for(let i = 0; i < this.editEffects.length; i++){
+            if(this.editEffects[i].effect.value == 'none' || this.editEffects[i].effect.value == ''){
+                this.editEffects.splice(i,1);
+                i--;
+            }
+            else{
+                let mult = parseFloat(this.editEffects[i].multiplier.value);
+                if(Number.isNaN(mult) || mult < 0) mult = 0;
+                this.editEffects[i] = {mult, effect: objectSets.ItemEffectEntity.get(parseInt(this.editEffects[i].effect.value))};
+            }
+        }
+
+        let newEffects = this.editEffects;
+        console.log();
+        for(let x of newEffects){
+            let index = x.effect.items.map(x => x.item).indexOf(this.id);
+            if(index >= 0){ // just multiplier changed
+                let items = x.effect.items;
+                items.splice(index,1,{item:this.id, mult:x.mult});
+                socket.emit('updateData','ItemEffectEntity',x.effect.id,{items});
+            }
+            else{ // item has to be added to effect
+                socket.emit('updateData','ItemEffectEntity',x.effect.id,{items: x.effect.items.concat([{item:this.id, mult:x.mult}])});
+            }
+        }
+        newEffects = newEffects.map(x => x.effect.id);
+        for(let x of this.getItemEffects()){
+            if(!newEffects.includes(x.effect.id)){ // item has to be removed from effect
+                let items = x.effect.items;
+                let index = items.find(y => y.item == this.id);
+                if(index >= 0) items.splice(index,1);
+                socket.emit('updateData','ItemEffectEntity',x.effect.id,{items});
+            }
+        }
+
+        super.saveEdit(changed);
+    }
 }
 
 class ItemEffectEntity extends Entity {
-    constructor(id,parent, storyline){
+    constructor(id,parent, storyline, player){
         super(id, parent, storyline);
+        this.player = player;
+        this.editItems = [];
+
+        this.dom.itemsLabel = this.dom.grid.appendChild(document.createNode('div',{innerHTML: 'Items:'},{display:'none'}));
+        this.dom.itemsWrapper = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
+        this.dom.items = this.dom.itemsWrapper.appendChild(document.createNode('div'));
+        this.dom.itemsWrapper.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: ()=>this.addEditItemElement()}));
+
         objectSets.ItemEffectEntity.set(this.id, this);
     }
     
@@ -1390,7 +1740,6 @@ class ItemEffectEntity extends Entity {
     }
 
     async update(data){
-        console.log(data);
         if(this.editing){
             function recursiveUpdateDataCash(cash, newData){
                 for(let i in newData){
@@ -1411,18 +1760,18 @@ class ItemEffectEntity extends Entity {
 
         this.updateDataCash = null;
 
-        await super.update(data);
+        let changedName = (data.name!=undefined && this.name != data.name);
+        if(changedName) delete this.player.effect[this.referenceName];
 
-        let newObjectInits = [];
+        await super.update(data);
+        
+        if(changedName) this.player.effect[this.referenceName] = this;
 
         if(data.items && !this.items?.deepEquals(data.items)){
             this.items = data.items;
-            for(let x of this.items){
-                if(!objectSets.ItemEntity.get(x.item)) newObjectInits.push((new ItemEntity(x.item, this, this.storyline)).init());
-            }
         }
 
-        await Promise.all(newObjectInits);
+        return this;
     }
 
     getItems(){
@@ -1438,12 +1787,118 @@ class ItemEffectEntity extends Entity {
         this.setEditing(false);
         socket.emit('removeData','ItemEffectEntity',this.id);
     }
+
+    edit(){
+        super.edit();
+        this.dom.itemsLabel.style.display = '';
+        this.dom.itemsWrapper.style.display = '';
+        this.editItems = [];
+        this.dom.items.innerHTML = '';
+        for(let x of this.items) this.addEditItemElement(x.item, x.mult);
+        for(let x of this.editItems) x.player.onchange();
+    }
+
+    addEditItemElement(itemId, multiplier){
+        let inputs = {};
+        let root = this.dom.items.appendChild(document.createNode('div',{className:'itemeffect_edit_item'}));
+        inputs.multiplier = root.appendChild(document.createNode('input',{
+            type: 'number',
+            step: 'any',
+            min: 0,
+            value: multiplier ? multiplier : 0
+        }));
+
+        inputs.player = root.appendChild(document.createNode('select', {onchange: ()=>{
+            let value = inputs.item.value;
+            inputs.item.innerHTML = '';
+            inputs.item.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+            if(inputs.player.value == 'none' || inputs.player.value == '') return;
+            let player = objectSets.PlayerEntity.get(parseInt(inputs.player.value));
+            for(let x of player.getAllDescendants('items')){
+                if(!this.editItems.map(x => parseInt(x.item.value)).includes(x.id))
+                    inputs.item.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+            }
+            inputs.item.value = value;
+            if(!inputs.item.value) inputs.item.value = 'none';
+        }}));
+        for(let x of currentStoryline.getPlayerEntities()) inputs.player.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+
+        inputs.item = root.appendChild(document.createNode('select',{onchange:()=>{
+            for(let x of this.editItems) x.player.onchange();
+        }}));
+
+        let item;
+        if(itemId != undefined) item = objectSets.ItemEntity.get(itemId);
+
+        if(item){
+            inputs.player.value = item.player.id;
+            inputs.player.onchange();
+            inputs.item.value = item.id;
+        }
+        else{
+            inputs.player.value = this.player.id;
+            inputs.player.onchange();
+        }
+
+        this.editItems.push(inputs);
+        this.dom.items.appendChild(root);
+    }
+
+    saveEdit(){
+        let changed = {};
+
+        for(let i = 0; i < this.editItems.length; i++){
+            if(this.editItems[i].item.value == 'none' || this.editItems[i].item.value == ''){
+                this.editItems.splice(i,1);
+                i--;
+            }
+            else{
+                let mult = parseFloat(this.editItems[i].multiplier.value);
+                if(Number.isNaN(mult) || mult < 0) mult = 0;
+                this.editItems[i] = {mult, item: parseInt(this.editItems[i].item.value)};
+            }
+        }
+
+        if(this.items.length != this.editItems.length){
+            let currentItems = this.items.slice().sort((a,b) => a.item - b.item);
+            let newItems = this.editItems.slice().sort((a,b) => a.item - b.item);
+            if(!currentItems.map(x => x.item).equals(newItems.map(x => x.item)) || !currentItems.map(x => x.mult).equals(newItems.map(x => x.mult))){
+                changed.items = this.editItems;
+            }
+        }
+        else changed.items = this.editItems;
+
+        super.saveEdit(changed);
+    }
+
+    reloadDOMVisibility(){
+        this.dom.itemsLabel.style.display = 'none';
+        this.dom.itemsWrapper.style.display = 'none';
+
+        super.reloadDOMVisibility();
+    }
 }
 
 class SkillEntity extends Entity {
-    constructor(id,parent, storyline){
+    constructor(id,parent, storyline, player){
         super(id, parent, storyline);
+        this.player = player;
         objectSets.SkillEntity.set(this.id, this);
+
+        this.dom.learnedLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML: 'Learned:'}), this.dom.descriptionLabel);
+
+        this.dom.learnedWrapper = this.dom.grid.insertBefore(document.createNode('div'), this.dom.descriptionLabel);
+        this.dom.learned = this.dom.learnedWrapper.appendChild(document.createNode('input',{
+            type: 'checkbox',
+            onchange: ()=>{
+                if(this.learned == this.dom.learned.checked) return;
+                this.learned = this.dom.learned.checked;
+                socket.emit('updateData','SkillEntity',this.id,{learned:this.learned});
+            }
+        }));
+
+        this.dom.requirementsLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML: 'Requirements:'}), this.dom.descriptionLabel);
+        this.dom.requirements = this.dom.grid.insertBefore(document.createNode('div',{className:'skill_requirements'}), this.dom.descriptionLabel);
     }
     
     async init(){
@@ -1475,15 +1930,25 @@ class SkillEntity extends Entity {
 
         this.updateDataCash = null;
 
+        let changedName = (data.name!=undefined && this.name != data.name);
+        if(changedName) delete this.player.skill[this.referenceName];
+
         await super.update(data);
+        
+        if(changedName) this.player.skill[this.referenceName] = this;
 
         if(data.learned != undefined && this.learned != data.learned){
             this.learned = data.learned;
+            this.dom.learned.checked = this.learned;
         }
 
         if(data.requirements != undefined && this.requirements != data.requirements){
             this.requirements = data.requirements;
+            this.dom.requirements.innerHTML = parseMarkup(this.requirements);
+            this.reloadDOMVisibility();
         }
+
+        return this;
     }
 
     delete(){
@@ -1491,11 +1956,46 @@ class SkillEntity extends Entity {
         this.setEditing(false);
         socket.emit('removeData','SkillEntity',this.id);
     }
+
+    edit(){
+        super.edit();
+        this.dom.learnedLabel.style.display = 'none';
+        this.dom.learnedWrapper.style.display = 'none';
+
+        this.dom.requirementsLabel.style.display = '';
+        this.dom.requirements.style.display = '';
+        this.dom.requirements.innerHTML = '';
+        this.dom.input.requirements = this.dom.requirements.appendChild(document.createNode('textarea',{value: this.requirements}));
+    }
+
+    saveEdit(){
+        let changed = {};
+
+        if(this.dom.input.requirements.value != this.requirements) changed.requirements = this.dom.input.requirements.value;
+
+        super.saveEdit(changed);
+    }
+
+    cancelEdit(){
+        this.dom.requirements.innerHTML = parseMarkup(this.requirements);
+        super.cancelEdit();
+    }
+
+    reloadDOMVisibility(){
+        this.dom.learnedLabel.style.display = '';
+        this.dom.learnedWrapper.style.display = '';
+
+        this.dom.requirementsLabel.style.display = this.requirements ? '' : 'none';
+        this.dom.requirements.style.display = this.requirements ? '' : 'none';
+
+        super.reloadDOMVisibility();
+    }
 }
 
 class CellEntity extends Entity {
-    constructor(id,parent, storyline){
+    constructor(id,parent, storyline, player){
         super(id, parent, storyline);
+        this.player = player;
         objectSets.CellEntity.set(this.id, this);
     }
     
@@ -1528,7 +2028,12 @@ class CellEntity extends Entity {
 
         this.updateDataCash = null;
 
+        let changedName = (data.name!=undefined && this.name != data.name);
+        if(changedName) delete this.player.cell[this.referenceName];
+
         await super.update(data);
+        
+        if(changedName) this.player.cell[this.referenceName] = this;
 
         if(data.cellType != undefined && this.cellType != data.cellType){
             this.cellType = data.cellType;
@@ -1539,6 +2044,8 @@ class CellEntity extends Entity {
         }
 
         // TODO: other properties
+
+        return this;
     }
 
     delete(){
@@ -1555,7 +2062,7 @@ class Category {
         this.storyline = storyline;
         this.editing = false;
         this.type = this.constructor;
-        this.open = true; // TODO: read from localStorage if open
+        this.open = true;
         
         this.deleteMessages = [
             'This will delete this category. Are your sure you want to continue?',
@@ -1578,6 +2085,45 @@ class Category {
         }}));
         this.dom.icons.edit = this.dom.head.appendChild(document.createNode('img', {className: 'icon edit_icon', src:'icons/pencil-2.png', onclick: ()=>this.edit()}));
         this.dom.icons.delete = this.dom.head.appendChild(document.createNode('img', {className: 'icon delete_icon', src:'icons/bin-2.png', onclick: ()=>this.delete()}, {display:'none'}));
+
+        this.dom.head.appendChild(document.createNode('div',{innerHTML:'+', className:'add_element add_element_category', onclick: e=>{
+            let fields = [];
+            switch(this.type){
+                case ItemCategory:
+                    fields = [
+                        ['Item',()=>this.player.openAddPopup('items',false,this)],
+                        ['Category',()=>this.player.openAddPopup('items',true,this)]
+                    ];
+                    break;
+
+                case ItemEffectCategory:
+                    fields = [
+                        ['Item Effect',()=>alert('Item Effect')],
+                        ['Category',()=>alert('Category')]
+                    ];
+                    break;
+                
+                case SkillCategory:
+                    fields = [
+                        ['Skill',()=>alert('Skill')],
+                        ['Category',()=>alert('Category')]
+                    ];
+                    break;
+
+                case CellCategory:
+                    fields = [
+                        ['Dynamic Value',()=>alert('Dynamic Value')],
+                        ['Constant Value',()=>alert('Constant Value')],
+                        ['Control',()=>alert('Control')],
+                        ['Text/Image',()=>alert('Text/Image')],
+                        ['Category',()=>alert('Category')]
+                    ];
+                    break;
+            }
+            addMenu.open(e.pageX,e.pageY,...fields);
+            e.stopPropagation();
+        }}));
+
 
         this.dom.title = this.dom.head.appendChild(document.createNode('h3', {onclick: ()=>this.toggleOpen()}));
         this.dom.foldArrow = this.dom.title.appendChild(document.createNode('span', {className:'fold_arrow non_selectable', innerHTML: String.fromCharCode(9654)}));
@@ -1640,7 +2186,7 @@ class Category {
         if(data.entities!=undefined && !this.entities?.equals(data.entities)){
             this.entities = data.entities;
             for(let id of this.entities){
-                if(!objectSets[this.entityType.name].get(id)) newObjectInits.push((new this.entityType(id, this, this.storyline)).init());
+                if(!objectSets[this.entityType.name].get(id)) newObjectInits.push((new this.entityType(id, this, this.storyline, this.player)).init());
             }
             this.dom.entities.innerHTML = '';
             for(let entity of this.getEntities()) this.dom.entities.appendChild(entity.dom.root);
@@ -1649,13 +2195,15 @@ class Category {
         if(data.categories!=undefined && !this.categories?.equals(data.categories)){
             this.categories = data.categories;
             for(let id of this.categories){
-                if(!objectSets[this.type.name].get(id)) newObjectInits.push((new this.type(id, this, this.storyline)).init());
+                if(!objectSets[this.type.name].get(id)) newObjectInits.push((new this.type(id, this, this.storyline, this.player)).init());
             }
             this.dom.categories.innerHTML = '';
             for(let category of this.getCategories()) this.dom.categories.appendChild(category.dom.root);
         }
 
         await Promise.all(newObjectInits);
+
+        return this;
     }
 
     registerSortableContainers(entity, category){
@@ -1744,32 +2292,36 @@ class StorylineInfoCategory extends Category {
 }
 
 class ItemCategory extends Category {
-    constructor(id, parent, storyline){
+    constructor(id, parent, storyline, player){
         super(id, parent, storyline);
+        this.player = player;
         this.entityType = ItemEntity;
         objectSets.ItemCategory.set(this.id, this);
     }
 }
 
 class ItemEffectCategory extends Category {
-    constructor(id, parent, storyline){
+    constructor(id, parent, storyline, player){
         super(id, parent, storyline);
+        this.player = player;
         this.entityType = ItemEffectEntity;
         objectSets.ItemEffectCategory.set(this.id, this);
     }
 }
 
 class SkillCategory extends Category {
-    constructor(id, parent, storyline){
+    constructor(id, parent, storyline, player){
         super(id, parent, storyline);
+        this.player = player;
         this.entityType = SkillEntity;
         objectSets.SkillCategory.set(this.id, this);
     }
 }
 
 class CellCategory extends Category {
-    constructor(id, parent, storyline){
+    constructor(id, parent, storyline, player){
         super(id, parent, storyline);
+        this.player = player;
         this.entityType = CellEntity;
         objectSets.CellCategory.set(this.id, this);
     }
@@ -1938,6 +2490,8 @@ class StorylineInfoType {
         }
 
         await Promise.all(newObjectInits);
+
+        return this;
     }
 
     registerSortableContainers(entity, category){
@@ -1980,6 +2534,18 @@ class BoardEntity {
 (async function(){
     await loadPromises.body.loaded;
 
+    document.body.getHeight = function(){
+		var html = document.documentElement;
+		return Math.max(this.scrollHeight, this.offsetHeight, html.clientHeight, html.scrollHeight, html.offsetHeight);
+    }
+    
+    document.body.getWidth = function(){
+		var html = document.documentElement;
+		return Math.max(this.scrollWidth, this.offsetWidth, html.clientWidth, html.scrollWidth, html.offsetWidth);
+	}
+
+    addMenu.dom = document.getElementById('add_menu');
+
     popup.popup = document.getElementById('popup');
     popup.overlay = document.getElementById('popup_overlay');
     popup.overlay.onclick = e=>{
@@ -1988,6 +2554,7 @@ class BoardEntity {
     }
 
     document.body.onclick = e => {
+        addMenu.close();
         if(currentlyEditing && e?.target && !currentlyEditing.dom.root.contains(e.target)) currentlyEditing?.saveEdit();
     };
 
@@ -1999,11 +2566,16 @@ class BoardEntity {
 })();
 
 /* TODO/NOTES:
-- entity specifics: cells display system, itemEffects edit items, skills (learned and requirements)
+- entity specifics: cells display system
+- notes (extra entity type, children of player)
+- adding elements
 - value system (show value of itemEffects)
+- transfering items
+- initializing discord user
+- settings
+- music
+- discord bot (roles, announcement notifications)
 - map system
-
-- id system in MongoDB
 
 - copyright wall (with password one time entered -> saved as cookie (note that password is provided on discord in welcome channel))
 
@@ -2014,9 +2586,10 @@ class BoardEntity {
 
 - Settings:
     - separate into sections (General, Storyline, Discord)
-        - General: Dark Mode, Category Body Left Offset (in pixel for CSS), 
+        - General: Dark Mode, Category Body Left Offset (in pixel for CSS), add new elements on top/bottom, enable adding elements to categories directly ("Paul mode"), 
+                default behaviour when leaving edit mode (save/cancel)
                 Undo Protocol length/Undo/Redo (show protocol in foldable section (display Entity type, name and parameters and parameter values before and after on hover))
-        - Storyline: visibility of player entities, DM mode (activates visibility of protected entities)
+        - Storyline: switch storyline, visibility of player entities, DM mode (activates visibility of protected entities)
         - Discord: announcement notifications (see below)
 
 - tree-like music playlist system (just with category system) containing any supported service, enable user to move any sub-folder into playing tracks (no loose songs on root level)
