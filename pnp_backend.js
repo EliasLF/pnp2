@@ -90,6 +90,10 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function getReferenceName(name){
+    return name.toLowerCase().replace(/[°\^\!"%&\/\(\)=\?\{\}\[\]\\\*\+\~'#\-:.;,\<\>\|]/g,'').replace(/ +/g,'_');
+}
+
 
 const ISO8601 = {
     parseDuration: function (iso8601Duration) {
@@ -1123,7 +1127,7 @@ io.on('connection', (socket) => {
                 break;
             
             case 'PlayerEntity':
-                for(let property of ['items','itemEffects','skills','cells']){
+                for(let property of ['items','itemEffects','skills','cells','notes']){
                     if(data[property]?.entities != undefined){
                         if(!tmpData[property]) tmpData[property] = {};
                         tmpData[property].entities = data[property].entities;
@@ -1184,7 +1188,7 @@ io.on('connection', (socket) => {
 
         if(tmpData.name != undefined){
             if(['ItemEntity','ItemEffectEntity','SkillEntity','CellEntity'].includes(collection)){
-                tmpData.reference_name = data.name.decodeHTML().toLowerCase().replace(/ /g,'_');
+                tmpData.reference_name = getReferenceName(data.name.decodeHTML());
                 player = (await mongodb.collection(collection).findOne({_id: id}, {projection: {_id:0, player:1}}))?.player;
                 if(player == undefined) return error('player entity id not found');
                 if(await mongodb.collection(collection).findOne({reference_name: tmpData.reference_name, player, _id: {$ne: id}})){
@@ -1196,7 +1200,7 @@ io.on('connection', (socket) => {
             }
     
             if(collection == 'PlayerEntity'){
-                tmpData.reference_name = data.name.decodeHTML().toLowerCase().replace(/ /g,'_');
+                tmpData.reference_name = getReferenceName(data.name.decodeHTML());
                 storyline = (await mongodb.collection(collection).findOne({_id: id}, {projection: {_id:0, storyline:1}}))?.storyline;
                 if(storyline == undefined) return error('storyline entity id not found');
                 if(await mongodb.collection(collection).findOne({reference_name: tmpData.reference_name, storyline, _id: {$ne: id}})){
@@ -1272,7 +1276,7 @@ io.on('connection', (socket) => {
             else tmpData.player = (await mongodb.collection(collection.slice(0,-6) + 'Category').findOne({_id: parentId}, {projection: {_id:0, player:1}}))?.player;
 
             if(collection.endsWith('Entity')){
-                tmpData.reference_name = tmpData.name.decodeHTML().toLowerCase().replace(/ /g,'_');
+                tmpData.reference_name = getReferenceName(tmpData.name.decodeHTML());
                 if(await mongodb.collection(collection).findOne({reference_name: tmpData.reference_name, player: tmpData.player}))
                     return socket.emit('err','there is already an entity of this type with an equivalent name within this player entity, '+
                     'which would create ambiguity in dynamic values');
@@ -1281,7 +1285,7 @@ io.on('connection', (socket) => {
 
         if(collection == 'PlayerEntity'){
             if(tmpData.name == 'this') return error('\'this\' is an invalid name for this type of entity');
-            tmpData.reference_name = tmpData.name.decodeHTML().toLowerCase().replace(/ /g,'_');
+            tmpData.reference_name = getReferenceName(tmpData.name.decodeHTML());
             tmpData.storyline = parentId;
             if(await mongodb.collection(collection).findOne({reference_name: tmpData.reference_name, storyline: tmpData.storyline}))
                 return error('there is already an entity of this type with an equivalent name within this storyline entity, '+
@@ -1372,7 +1376,7 @@ io.on('connection', (socket) => {
                 break;
             
             case 'PlayerEntity':
-                for(let property of ['items','itemEffects','skills','cells']){
+                for(let property of ['items','itemEffects','skills','cells','notes']){
                     tmpData[property] = {};
 
                     if(template?.[property]?.entities && (!templateMask || (typeof templateMask[property] != 'object' && templateMask[property]) || 
@@ -1436,6 +1440,17 @@ io.on('connection', (socket) => {
                 case 'SkillEntity': 
                     parentCollection = loose ? 'PlayerEntity' : 'SkillCategory';
                     parentProperty = loose ? 'skills' : 'entities';
+                    parentSubProperty = loose ? 'entities' : undefined;
+                    break;
+                
+                case 'NoteCategory': 
+                    parentCollection = loose ? 'PlayerEntity' : 'NoteCategory';
+                    parentProperty = loose ? 'notes' : 'categories';
+                    parentSubProperty = loose ? 'categories' : undefined;
+                    break;
+                case 'NoteEntity': 
+                    parentCollection = loose ? 'PlayerEntity' : 'NoteCategory';
+                    parentProperty = loose ? 'notes' : 'entities';
                     parentSubProperty = loose ? 'entities' : undefined;
                     break;
 
@@ -1551,7 +1566,7 @@ io.on('connection', (socket) => {
             let itemPromises = [];
             templateItemsIdMap = new Map(); 
 
-            for(let property of ['items','skills','cells','itemEffects']){
+            for(let property of ['items','skills','cells','itemEffects','notes']){
                 
                 if(property == 'itemEffects'){
                     while(true){
@@ -1567,8 +1582,8 @@ io.on('connection', (socket) => {
                     if(template[property].entities.length > 0){
                         // to keep order: save all previous promises and wait everytime before registering with parent until all others finished
                         let keepOrderPromises = [];
-                        let childCollection = (property == 'items') ? 'ItemEntity' : (property == 'skills') ? 'SkillEntity' : 
-                            (property == 'cells') ? 'CellEntity' : 'ItemEffectEntity';
+                        let childCollection = property == 'notes' ? 'NoteEntity' : property == 'items' ? 'ItemEntity' : property == 'skills' ? 'SkillEntity' : 
+                            property == 'cells' ? 'CellEntity' : 'ItemEffectEntity';
                         for(let templateId of template[property].entities) keepOrderPromises.push(addData(childCollection, _, {
                             loose: true,
                             playerId: id,
@@ -1589,8 +1604,8 @@ io.on('connection', (socket) => {
                     if(template[property].categories.length > 0){
                         // to keep order: save all previous promises and wait everytime before registering with parent until all others finished
                         let keepOrderPromises = [];
-                        let childCollection = (property == 'items') ? 'ItemCategory' : (property == 'skills') ? 'SkillCategory' : 
-                            (property == 'cells') ? 'CellCategory' : 'ItemEffectCategory';
+                        let childCollection = property == 'notes' ? 'NoteCategory' : property == 'items' ? 'ItemCategory' : property == 'skills' ? 'SkillCategory' : 
+                            property == 'cells' ? 'CellCategory' : 'ItemEffectCategory';
                         for(let templateId of template[property].categories) keepOrderPromises.push(addData(childCollection, _, {
                             loose: true,
                             playerId: id,
@@ -1632,8 +1647,33 @@ io.on('connection', (socket) => {
                 for(let childId of data.skills.categories) removeFromDB('SkillCategory', childId);
                 for(let childId of data.skills.entities) removeFromDB('SkillEntity', childId);
     
+                for(let childId of data.notes.categories) removeFromDB('NoteCategory', childId);
+                for(let childId of data.notes.entities) removeFromDB('NoteEntity', childId);
+    
                 for(let childId of data.cells.categories) removeFromDB('CellCategory', childId);
                 for(let childId of data.cells.entities) removeFromDB('CellEntity', childId);
+            }
+        }
+
+        // if is item delete from all itemEffects
+        if(collection == 'ItemEntity'){
+            let concernedItemEffects = (await mongodb.collection('ItemEffectEntity').find({'items.item':id}).toArray()).map(x => x._id);
+
+            if(!callbacksAfterHalts.ItemEffectEntity) callbacksAfterHalts.ItemEffectEntity = {};
+            for(let effectId of concernedItemEffects){
+                if(callbacksAfterHalts.ItemEffectEntity[effectId]){
+                    await (new Promise(resolve => {
+                        callbacksAfterHalts.ItemEffectEntity[effectId].push(resolve);
+                    }));
+                }
+
+                io.emit('updateData_ItemEffectEntity_'+effectId, 
+                    (await mongodb.collection('ItemEffectEntity').findOneAndUpdate(
+                        {'_id':effectId},
+                        {$pull: {'items':{'item':id}}},
+                        {returnOriginal:false, projection:{_id:0,items:1}}
+                    )).value
+                );
             }
         }
 
@@ -1687,6 +1727,19 @@ io.on('connection', (socket) => {
             case 'SkillEntity': 
                 parentCollection = ['PlayerEntity', 'SkillCategory'];
                 parentProperty = ['skills', 'entities'];
+                parentSubProperty = ['entities', undefined];
+                break;
+            
+            case 'NoteCategory': 
+                parentCollection = ['PlayerEntity', 'NoteCategory'];
+                parentProperty = ['notes', 'categories'];
+                parentSubProperty = ['categories', undefined];
+                parentEntityProperty = ['items', 'entities'];
+                parentEntitySubProperty = ['entities', undefined];
+                break;
+            case 'NoteEntity': 
+                parentCollection = ['PlayerEntity', 'NoteCategory'];
+                parentProperty = ['notes', 'entities'];
                 parentSubProperty = ['entities', undefined];
                 break;
 
@@ -1788,28 +1841,6 @@ io.on('connection', (socket) => {
             )).value);
         }
         else error('no parent found');
-
-        // if is item delete from all itemEffects
-        if(collection == 'ItemEntity'){
-            let concernedItemEffects = (await mongodb.collection('ItemEffectEntity').find({'items.item':id}).toArray()).map(x => x._id);
-
-            if(!callbacksAfterHalts.ItemEffectEntity) callbacksAfterHalts.ItemEffectEntity = {};
-            for(let effectId of concernedItemEffects){
-                if(callbacksAfterHalts.ItemEffectEntity[effectId]){
-                    await (new Promise(resolve => {
-                        callbacksAfterHalts.ItemEffectEntity[effectId].push(resolve);
-                    }));
-                }
-
-                io.emit('updateData_ItemEffectEntity_'+effectId, 
-                    (await mongodb.collection('ItemEffectEntity').findOneAndUpdate(
-                        {'_id':effectId},
-                        {$pull: {'items':{'item':id}}},
-                        {returnOriginal:false, projection:{_id:0,items:1}}
-                    )).value
-                );
-            }
-        }
 
         removeFromDB(collection, id, Boolean(removeChildren));
     });

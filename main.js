@@ -267,11 +267,13 @@ var objectSets = {
     ItemEffectEntity: new Map(),
     SkillEntity: new Map(),
     CellEntity: new Map(),
+    NoteEntity: new Map(),
     StorylineInfoCategory: new Map(),
     ItemCategory: new Map(),
     ItemEffectCategory: new Map(),
     SkillCategory: new Map(),
     CellCategory: new Map(),
+    NoteCategory: new Map(),
     BoardEnvironment: new Map(),
     BoardEntity: new Map()
 };
@@ -366,10 +368,36 @@ class Storyline {
         this.dom = {};
         this.dom.generalInfo = document.createNode('div');
 
+        this.dom.addButtons = {};
+
         this.dom.menuTabs = {};
         this.dom.menuTabs.general = document.createNode('div',{className:'secondary_menu_tab',innerHTML:'General',onclick: ()=>this.openTab('general')});
         this.dom.menuTabs.players = document.createNode('div');
+        this.dom.addButtons.players = document.createNode('div',{
+            innerHTML:'+',
+            className:'add_element add_element_small',
+            onclick: e=>{
+                e.stopPropagation();
+                this.openAddPopup('player');
+            }
+        });
         this.dom.menuTabs.storlineInfoTypes = document.createNode('div');
+        this.dom.addButtons.storlineInfoTypes = document.createNode('div',{
+            innerHTML:'+',
+            className:'add_element add_element_small',
+            onclick: e=>{
+                e.stopPropagation();
+                this.openAddPopup('storylineInfoType');
+            }
+        });
+
+        this.dom.addButtons.generalInfo = document.createNode('div',{className:'add_element_wrapper'});
+        this.dom.addButtons.generalInfo.appendChild(document.createNode('div',{innerHTML:'+', className:'add_element',
+            onclick: e=>{
+                e.stopPropagation();
+                this.openAddPopup('storylineInfo');
+            }
+        }));
 
         this.sortables = {};
         this.sortables.storlineInfoTypes = new Sortable.default([this.dom.menuTabs.storlineInfoTypes], {
@@ -559,6 +587,7 @@ class Storyline {
             document.getElementById('secondary_menu').innerHTML = '';
             document.getElementById('secondary_menu').appendChild(this.dom.menuTabs.general);
             document.getElementById('secondary_menu').appendChild(this.dom.menuTabs.storlineInfoTypes);
+            document.getElementById('secondary_menu').appendChild(this.dom.addButtons.storlineInfoTypes);
             document.getElementById('secondary_menu').style.display = '';
 
             document.getElementById('tertiary_menu').style.display = 'none';
@@ -577,6 +606,7 @@ class Storyline {
             document.getElementById('main_content').appendChild(storylineSelectionWrapper);
             storylineSelection.value = this.id;
             document.getElementById('main_content').appendChild(this.dom.generalInfo);
+            document.getElementById('main_content').appendChild(this.dom.addButtons.generalInfo);
         }
         else{
             if(!this.info.types.includes(tab)) return;
@@ -592,6 +622,7 @@ class Storyline {
 
             document.getElementById('secondary_menu').innerHTML = '';
             document.getElementById('secondary_menu').appendChild(this.dom.menuTabs.players);
+            document.getElementById('secondary_menu').appendChild(this.dom.addButtons.players);
             document.getElementById('secondary_menu').style.display = '';
             document.getElementById('tertiary_menu').style.display = 'none';
 
@@ -603,6 +634,122 @@ class Storyline {
         this.currentOpenPlayer = player;
         if(!this.players.entities.includes(player)) return;
         objectSets.PlayerEntity.get(player)?.openTab();
+    }
+
+    async openAddPopup(property){
+        // properties: player, storylineInfoType, storylineInfo
+        var wrapper = document.createNode('div',{className:'add_popup_wrapper',onclick: e=>e.stopPropagation()});
+
+        wrapper.appendChild(document.createNode('h3',{
+            innerHTML:'Create new ' + (property == 'storylineInfoType' ? 'storyline info type' : property == 'storylineInfo' ? 'storyline info' : property)
+        }));
+
+        let grid = wrapper.appendChild(document.createNode('div',{className:'add_popup_grid'}));
+        grid.appendChild(document.createNode('div',{innerHTML:'Name:&nbsp;'}));
+        let nameInput = grid.appendChild(document.createNode('div')).appendChild(document.createNode('input',{onkeyup: e=>{
+            if(e.key == 'Enter') commit();
+        }}));
+
+        var templateSelect = {};
+        var templateMask = {};
+
+        if(property != 'storylineInfoType'){
+            grid.appendChild(document.createNode('div',{innerHTML:'Template:&nbsp;'}));
+            let templateSelectSection = grid.appendChild(document.createNode('div'));
+
+            templateSelect.storyline = templateSelectSection.appendChild(document.createNode('select', {onchange: async function(){
+                templateSelect.element.innerHTML = '';
+                templateSelect.element.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+                if(this.value != 'none' && this.value != ''){
+                    let storyline = objectSets.Storyline.get(parseInt(this.value));
+                    if(!storyline) storyline = await (new Storyline(parseInt(this.value))).init();
+                    if(property == 'player')
+                        for(let x of storyline.getPlayerEntities()) templateSelect.element.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+                    else // property == 'storylineInfo'
+                        for(let x of storyline.getGeneralInfo()) templateSelect.element.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+                }
+                templateSelect.element.onchange();
+            }}));
+            templateSelect.storyline.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+            for(let [id,obj] of storylineSelectionOptions.entries()) templateSelect.storyline.appendChild(document.createNode('option',{innerHTML:obj.innerHTML,value:id}));
+            templateSelect.storyline.value = this.id;
+
+            templateSelect.element = templateSelectSection.appendChild(document.createNode('select', {onchange: function(){
+                if(this.value == 'none' || this.value == '') templateMaskSection.style.display = 'none';
+                else templateMaskSection.style.display = '';
+            }}));
+
+            var templateMaskSection = templateSelectSection.appendChild(document.createNode('div'));
+            var checkAll = templateMaskSection.appendChild(document.createNode('input',{type:'checkbox',checked:true,onchange: function(){
+                for(let x of Object.values(templateMask)) x.checked = this.checked;
+            }}));
+            templateMaskSection.appendChild(document.createNode('b',{innerHTML:'&nbsp;All'}));
+            templateMaskSection.appendChild(document.createNode('br'));
+
+
+            function addMaskCheckbox(name, referenceName){
+                templateMask[referenceName] = templateMaskSection.appendChild(document.createNode('input',{type:'checkbox',checked:true,onchange: function(){
+                    if(!this.checked) checkAll.checked = false;
+                    else if(Object.values(templateMask).every(x => x.checked)) checkAll.checked = true;
+                }}));
+                templateMaskSection.appendChild(document.createNode('span',{innerHTML:'&nbsp;'+name}));
+                templateMaskSection.appendChild(document.createNode('br'));
+            }
+
+            addMaskCheckbox('Description','description');
+            addMaskCheckbox('Images','images');
+            addMaskCheckbox('Map data','coordinates');
+
+            if(property == 'player'){
+                addMaskCheckbox('Items','items');
+                addMaskCheckbox('Item Effects','itemEffects');
+                addMaskCheckbox('Values','cells');
+                addMaskCheckbox('Skills','skills');
+                addMaskCheckbox('Notes','notes');
+            }
+
+            await templateSelect.storyline.onchange();
+        }
+
+        var commit = ()=>{
+            if(!nameInput.value) return alert('The name field must not be empty.');
+            let template;
+            let mask;
+            if(property == 'player'){
+                if(nameInput.value == 'this') 
+                    return alert('\'this\' is a reserved word and cannot be used as a name for an entity of this type.\nHowever, it is fine to use it as part of a name.');
+                if($[getReferenceName(nameInput.value)]) 
+                    return alert('There is already an player with an equivalent name.');
+            }
+            if(property == 'player' || property == 'storylineInfo'){
+                if(templateSelect.element.value != 'none' && templateSelect.element.value != ''){
+                    template = parseInt(templateSelect.element.value);
+                    mask = {};
+                    for(let i in templateMask) mask[i] = templateMask[i].checked;
+                    mask.path = mask.coordinates;
+                }
+            }
+
+            socket.emit(
+                'addData',
+                property == 'storylineInfoType' ? 'StorylineInfoType' : property == 'storylineInfo' ? 'StorylineInfoEntity' : 'PlayerEntity',
+                {name:nameInput.value},
+                {
+                    loose: true,
+                    generalInfo: true,
+                    parentId: this.id,
+                    template,
+                    templateMask: mask
+                }
+            );
+
+            popup.close();
+        }
+
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Create', className:'add_commit_button', onclick: ()=>commit()}));
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Cancel', className:'add_commit_button', onclick: ()=>popup.close()}));
+        
+        popup.open([wrapper]);
     }
 }
 
@@ -975,7 +1122,7 @@ class Entity { // abstract
 class StorylineInfoEntity extends Entity {
     constructor(id,parent){
         super(id, parent, parent);
-        this.toggleOpen();
+        if(parent.constructor == Storyline) this.toggleOpen();
         objectSets.StorylineInfoEntity.set(this.id, this);
     }
 
@@ -1008,6 +1155,7 @@ class PlayerEntity extends Entity {
         this.itemEffects = {};
         this.skills = {};
         this.cells = {};
+        this.notes = {};
         this.deleteMessages.push('With this also all subelements (items, skills, ...) will be deleted. Do you still want to proceed?');
 
         this.dom.icons.draggable.style.display = 'none';
@@ -1015,10 +1163,11 @@ class PlayerEntity extends Entity {
         this.dom.menuTab = document.createNode('div', {className:'secondary_menu_tab',onclick: ()=>this.storyline.openPlayer(this.id)});
         this.dom.menuTabs = {};
         this.dom.menuTabs.info = document.createNode('div', {innerHTML:'Info', onclick: ()=>this.openTab('info')});
-        this.dom.menuTabs.cells = document.createNode('div', {innerHTML:'Cells', onclick: ()=>this.openTab('cells')});
+        this.dom.menuTabs.cells = document.createNode('div', {innerHTML:'Values', onclick: ()=>this.openTab('cells')});
         this.dom.menuTabs.items = document.createNode('div', {innerHTML:'Items', onclick: ()=>this.openTab('items')});
         this.dom.menuTabs.itemEffects = document.createNode('div', {innerHTML:'Effects', onclick: ()=>this.openTab('itemEffects')});
         this.dom.menuTabs.skills = document.createNode('div', {innerHTML:'Skills', onclick: ()=>this.openTab('skills')});
+        this.dom.menuTabs.notes = document.createNode('div', {innerHTML:'Notes', onclick: ()=>this.openTab('notes')});
 
         this.dom.items = {};
         this.dom.items.root = document.createNode('div');
@@ -1099,9 +1248,28 @@ class PlayerEntity extends Entity {
             e.stopPropagation();
         }}));
 
+        this.dom.notes = {};
+        this.dom.notes.root = document.createNode('div');
+        this.dom.notes.categories = this.dom.notes.root.appendChild(document.createNode('div',{
+            id:'PlayerEntity_'+this.id+'_notes_categories', 
+            className:'category_container'
+        }));
+        this.dom.notes.entities = this.dom.notes.root.appendChild(document.createNode('div',{
+            id:'PlayerEntity_'+this.id+'_notes_entities', 
+            className:'entity_container'
+        }));
+        this.dom.notes.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
+            addMenu.open(e.pageX,e.pageY,
+                ['Note',()=>this.openAddPopup('notes', false)],
+                ['Category',()=>this.openAddPopup('notes', true)]
+            );
+            e.stopPropagation();
+        }}));
+
         this.sortables = {};
         this.sortables.entities = new Sortable.default([
-            this.dom.items.entities, this.dom.itemEffects.entities, this.dom.cells.entities, this.dom.skills.entities
+            this.dom.items.entities, this.dom.itemEffects.entities, this.dom.cells.entities, this.dom.skills.entities, this.dom.notes.entities
         ], {
             draggable: ".entity",
             handle: '.drag_handle_entity',
@@ -1110,7 +1278,7 @@ class PlayerEntity extends Entity {
             }
         });
         this.sortables.categories = new Sortable.default([
-            this.dom.items.categories, this.dom.itemEffects.categories, this.dom.cells.categories, this.dom.skills.categories
+            this.dom.items.categories, this.dom.itemEffects.categories, this.dom.cells.categories, this.dom.skills.categories, this.dom.notes.categories
         ], {
             draggable: ".category",
             handle: '.drag_handle_category',
@@ -1281,6 +1449,23 @@ class PlayerEntity extends Entity {
             for(let categoriey of this.getCategories('skills')) this.dom.skills.categories.appendChild(categoriey.dom.root);
         }
 
+        if(data.notes?.entities && !this.notes?.entities?.equals(data.notes.entities)){
+            this.notes.entities = data.notes.entities;
+            for(let id of this.notes.entities){
+                if(!objectSets.NoteEntity.get(id)) newObjectInits.push((new NoteEntity(id, this, this.storyline, this)).init());
+            }
+            this.dom.notes.entities.innerHTML = '';
+            for(let entity of this.getEntities('notes')) this.dom.notes.entities.appendChild(entity.dom.root);
+        }
+        if(data.notes?.categories && !this.notes?.categories?.equals(data.notes.categories)){
+            this.notes.categories = data.notes.categories;
+            for(let id of this.notes.categories){
+                if(!objectSets.NoteCategory.get(id)) newObjectInits.push((new NoteCategory(id, this, this.storyline, this)).init());
+            }
+            this.dom.notes.categories.innerHTML = '';
+            for(let categoriey of this.getCategories('notes')) this.dom.notes.categories.appendChild(categoriey.dom.root);
+        }
+
         if(data.cells?.entities && !this.cells?.entities?.equals(data.cells.entities)){
             this.cells.entities = data.cells.entities;
             for(let id of this.cells.entities){
@@ -1311,6 +1496,7 @@ class PlayerEntity extends Entity {
             document.getElementById('tertiary_menu').appendChild(this.dom.menuTabs.items);
             document.getElementById('tertiary_menu').appendChild(this.dom.menuTabs.itemEffects);
             document.getElementById('tertiary_menu').appendChild(this.dom.menuTabs.skills);
+            document.getElementById('tertiary_menu').appendChild(this.dom.menuTabs.notes);
             document.getElementById('tertiary_menu').style.display = '';
 
             let activeSecondaries = document.getElementsByClassName('secondary_menu_active');
@@ -1356,6 +1542,7 @@ class PlayerEntity extends Entity {
             case 'items': return this[property].entities.map(id => objectSets.ItemEntity.get(id));
             case 'itemEffects': return this[property].entities.map(id => objectSets.ItemEffectEntity.get(id));
             case 'skills': return this[property].entities.map(id => objectSets.SkillEntity.get(id));
+            case 'notes': return this[property].entities.map(id => objectSets.NoteEntity.get(id));
             case 'cells': return this[property].entities.map(id => objectSets.CellEntity.get(id));
         }
     }
@@ -1365,6 +1552,7 @@ class PlayerEntity extends Entity {
             case 'items': return this[property].categories.map(id => objectSets.ItemCategory.get(id));
             case 'itemEffects': return this[property].categories.map(id => objectSets.ItemEffectCategory.get(id));
             case 'skills': return this[property].categories.map(id => objectSets.SkillCategory.get(id));
+            case 'notes': return this[property].categories.map(id => objectSets.NoteCategory.get(id));
             case 'cells': return this[property].categories.map(id => objectSets.CellCategory.get(id));
         }
     }
@@ -1372,14 +1560,16 @@ class PlayerEntity extends Entity {
     delete(){
         if(!this.confirmDelete(3)) return;
         this.setEditing(false);
-        socket.emit('removeData','PlayerEntity',this.id);
+        socket.emit('removeData','PlayerEntity',this.id, true);
     }
 
     async openAddPopup(property, category, parentCategory, cellType){
         var wrapper = document.createNode('div',{className:'add_popup_wrapper',onclick: e=> e.stopPropagation()});
 
         wrapper.appendChild(document.createNode('h3',{
-            innerHTML:'Create new '+(property == 'items' ? 'item' : property == 'itemEffects' ? 'item effect' : property == 'skills' ? 'skill' : 'cell') + (category ? ' category' : '')
+            innerHTML:'Create new ' +
+                (property == 'notes' ? 'note' : property == 'items' ? 'item' : property == 'itemEffects' ? 'item effect' : property == 'skills' ? 'skill' : 'cell') + 
+                (category ? ' category' : '')
         }));
 
         let grid = wrapper.appendChild(document.createNode('div',{className:'add_popup_grid'}));
@@ -1470,7 +1660,7 @@ class PlayerEntity extends Entity {
             let template;
             let mask;
             if(!category){
-                if(nameInput.value == 'this') 
+                if(property != 'notes' && nameInput.value == 'this') 
                     return alert('\'this\' is a reserved word and cannot be used as a name for an entity of this type.\nHowever, it is fine to use it as part of a name.');
                 switch(property){
                     case 'items':
@@ -1495,6 +1685,7 @@ class PlayerEntity extends Entity {
                     template = parseInt(templateSelect.element.value);
                     mask = {};
                     for(let i in templateMask) mask[i] = templateMask[i].checked;
+                    mask.path = mask.coordinates;
                 }
             }
 
@@ -1517,6 +1708,27 @@ class PlayerEntity extends Entity {
         wrapper.appendChild(document.createNode('button',{innerHTML: 'Cancel', className:'add_commit_button', onclick: ()=>popup.close()}));
         
         popup.open([wrapper]);
+    }
+}
+
+class NoteEntity extends Entity {
+    constructor(id,parent, storyline, player){
+        super(id, parent, storyline);
+        objectSets.NoteEntity.set(this.id, this);
+    }
+
+    async init(){
+        // load entity data via websocket
+        socket.on('updateData_NoteEntity_'+this.id, (data) => this.update(data));
+        const data = await socketRequestData('NoteEntity', this.id);
+        await this.update(data);
+        return this;
+    }
+
+    delete(){
+        if(!this.confirmDelete(2)) return;
+        this.setEditing(false);
+        socket.emit('removeData','NoteEntity',this.id);
     }
 }
 
@@ -1690,7 +1902,6 @@ class ItemEntity extends Entity {
         }
 
         let newEffects = this.editEffects;
-        console.log();
         for(let x of newEffects){
             let index = x.effect.items.map(x => x.item).indexOf(this.id);
             if(index >= 0){ // just multiplier changed
@@ -2098,15 +2309,22 @@ class Category {
 
                 case ItemEffectCategory:
                     fields = [
-                        ['Item Effect',()=>alert('Item Effect')],
-                        ['Category',()=>alert('Category')]
+                        ['Item Effect',()=>this.player.openAddPopup('itemEffects',false,this)],
+                        ['Category',()=>this.player.openAddPopup('itemEffects',true,this)]
                     ];
                     break;
                 
                 case SkillCategory:
                     fields = [
-                        ['Skill',()=>alert('Skill')],
-                        ['Category',()=>alert('Category')]
+                        ['Skill',()=>this.player.openAddPopup('skills',false,this)],
+                        ['Category',()=>this.player.openAddPopup('skills',true,this)]
+                    ];
+                    break;
+                
+                case NoteCategory:
+                    fields = [
+                        ['Note',()=>this.player.openAddPopup('notes',false,this)],
+                        ['Category',()=>this.player.openAddPopup('notes',true,this)]
                     ];
                     break;
 
@@ -2117,6 +2335,13 @@ class Category {
                         ['Control',()=>alert('Control')],
                         ['Text/Image',()=>alert('Text/Image')],
                         ['Category',()=>alert('Category')]
+                    ];
+                    break;
+
+                case StorylineInfoCategory:
+                    fields = [
+                        ['Info',()=>this.storylineInfoType.openAddPopup(false,this)],
+                        ['Category',()=>this.storylineInfoType.openAddPopup(true,this)]
                     ];
                     break;
             }
@@ -2195,7 +2420,7 @@ class Category {
         if(data.categories!=undefined && !this.categories?.equals(data.categories)){
             this.categories = data.categories;
             for(let id of this.categories){
-                if(!objectSets[this.type.name].get(id)) newObjectInits.push((new this.type(id, this, this.storyline, this.player)).init());
+                if(!objectSets[this.type.name].get(id)) newObjectInits.push((new this.type(id, this, this.storyline, this.player ?? this.storylineInfoType)).init());
             }
             this.dom.categories.innerHTML = '';
             for(let category of this.getCategories()) this.dom.categories.appendChild(category.dom.root);
@@ -2284,8 +2509,9 @@ class Category {
 }
 
 class StorylineInfoCategory extends Category {
-    constructor(id, parent, storyline){
+    constructor(id, parent, storyline, type){
         super(id, parent, storyline);
+        this.storylineInfoType = type;
         this.entityType = StorylineInfoEntity;
         objectSets.StorylineInfoCategory.set(this.id, this);
     }
@@ -2327,6 +2553,15 @@ class CellCategory extends Category {
     }
 }
 
+class NoteCategory extends Category {
+    constructor(id, parent, storyline, player){
+        super(id, parent, storyline);
+        this.player = player;
+        this.entityType = NoteEntity;
+        objectSets.NoteCategory.set(this.id, this);
+    }
+}
+
 class StorylineInfoType {
     constructor(id, parent){
         this.id = id;
@@ -2352,6 +2587,16 @@ class StorylineInfoType {
             id:'StorylineInfoType_'+this.id+'_entities', 
             className:'entity_container'
         }));
+
+        
+        this.dom.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
+            addMenu.open(e.pageX,e.pageY,
+                ['Info',()=>this.openAddPopup(false)],
+                ['Category',()=>this.openAddPopup(true)]
+            );
+            e.stopPropagation();
+        }}));
 
         this.sortables = {};
         this.sortables.entities = new Sortable.default([this.dom.entities], {
@@ -2483,7 +2728,7 @@ class StorylineInfoType {
         if(data.categories!=undefined && !this.categories?.equals(data.categories)){
             this.categories = data.categories;
             for(let id of this.categories){
-                if(!objectSets.StorylineInfoCategory.get(id)) newObjectInits.push((new StorylineInfoCategory(id, this, this.storyline)).init());
+                if(!objectSets.StorylineInfoCategory.get(id)) newObjectInits.push((new StorylineInfoCategory(id, this, this.storyline, this)).init());
             }
             this.dom.categories.innerHTML = '';
             for(let category of this.getCategories()) this.dom.categories.appendChild(category.dom.root);
@@ -2513,6 +2758,20 @@ class StorylineInfoType {
         return this.categories.map(id => objectSets.StorylineInfoCategory.get(id));
     }
 
+    getAllDescendants(){
+        let result = new Set();
+        for(let x of this.getEntities()) result.add(x);
+
+        function addSubCategory(category){
+            for(let x of category.getEntities()) result.add(x);
+            for(let x of category.getCategories()) addSubCategory(x);
+        }
+
+        for(let x of this.getCategories()) addSubCategory(x);
+
+        return result;
+    }
+
     open(){
         let activeSecondaries = document.getElementsByClassName('secondary_menu_active');
         for(let x of activeSecondaries) x.classList?.remove('secondary_menu_active');
@@ -2520,6 +2779,121 @@ class StorylineInfoType {
 
         document.getElementById('main_content').innerHTML = '';
         document.getElementById('main_content').appendChild(this.dom.root);
+    }
+
+    async openAddPopup(category, parentCategory){
+        var wrapper = document.createNode('div',{className:'add_popup_wrapper',onclick: e=> e.stopPropagation()});
+
+        wrapper.appendChild(document.createNode('h3',{
+            innerHTML:'Create new storyline info' + (category ? ' category' : '')
+        }));
+
+        let grid = wrapper.appendChild(document.createNode('div',{className:'add_popup_grid'}));
+        grid.appendChild(document.createNode('div',{innerHTML:'Name:&nbsp;'}));
+        let nameInput = grid.appendChild(document.createNode('div')).appendChild(document.createNode('input',{onkeyup: e=>{
+            if(e.key == 'Enter') commit();
+        }}));
+
+        var templateSelect = {};
+        var templateMask = {};
+
+        if(!category){
+            grid.appendChild(document.createNode('div',{innerHTML:'Template:&nbsp;'}));
+            let templateSelectSection = grid.appendChild(document.createNode('div'));
+
+            templateSelect.storyline = templateSelectSection.appendChild(document.createNode('select', {onchange: async function(){
+                templateSelect.type.innerHTML = '';
+                templateSelect.type.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+                templateSelect.type.appendChild(document.createNode('option',{innerHTML:'General',value:'general'}));
+                if(this.value != 'none' && this.value != ''){
+                    let storyline = objectSets.Storyline.get(parseInt(this.value));
+                    if(!storyline) storyline = await (new Storyline(parseInt(this.value))).init();
+                    for(let x of storyline.getStorylineInfoTypes()) templateSelect.type.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+                }
+                templateSelect.type.onchange();
+            }}));
+            templateSelect.storyline.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+            for(let [id,obj] of storylineSelectionOptions.entries()) templateSelect.storyline.appendChild(document.createNode('option',{innerHTML:obj.innerHTML,value:id}));
+            templateSelect.storyline.value = this.storyline.id;
+
+            templateSelect.type = templateSelectSection.appendChild(document.createNode('select', {onchange: async function(){
+                templateSelect.element.innerHTML = '';
+                templateSelect.element.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+                if(this.value != 'none' && this.value != ''){
+                    if(this.value == 'general'){
+                        let storyline = objectSets.Storyline.get(parseInt(templateSelect.storyline.value));
+                        if(!storyline) return;
+                        for(let x of storyline.getGeneralInfo()) templateSelect.element.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+                    }
+                    else{
+                        let type = objectSets.StorylineInfoType.get(parseInt(this.value));
+                        if(!type) return;
+                        for(let x of type.getAllDescendants()) templateSelect.element.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+                    }
+                }
+                templateSelect.element.onchange();
+            }}));
+
+            templateSelect.element = templateSelectSection.appendChild(document.createNode('select', {onchange: function(){
+                if(this.value == 'none' || this.value == '') templateMaskSection.style.display = 'none';
+                else templateMaskSection.style.display = '';
+            }}));
+
+            var templateMaskSection = templateSelectSection.appendChild(document.createNode('div'));
+            var checkAll = templateMaskSection.appendChild(document.createNode('input',{type:'checkbox',checked:true,onchange: function(){
+                for(let x of Object.values(templateMask)) x.checked = this.checked;
+            }}));
+            templateMaskSection.appendChild(document.createNode('b',{innerHTML:'&nbsp;All'}));
+            templateMaskSection.appendChild(document.createNode('br'));
+
+
+            function addMaskCheckbox(name, referenceName){
+                templateMask[referenceName] = templateMaskSection.appendChild(document.createNode('input',{type:'checkbox',checked:true,onchange: function(){
+                    if(!this.checked) checkAll.checked = false;
+                    else if(Object.values(templateMask).every(x => x.checked)) checkAll.checked = true;
+                }}));
+                templateMaskSection.appendChild(document.createNode('span',{innerHTML:'&nbsp;'+name}));
+                templateMaskSection.appendChild(document.createNode('br'));
+            }
+
+            addMaskCheckbox('Description','description');
+            addMaskCheckbox('Images','images');
+            addMaskCheckbox('Map data','coordinates');
+
+            await templateSelect.storyline.onchange();
+        }
+
+        var commit = ()=>{
+            if(!nameInput.value) return alert('The name field must not be empty.');
+            let template;
+            let mask;
+            if(!category && templateSelect.element.value != 'none' && templateSelect.element.value != ''){
+                template = parseInt(templateSelect.element.value);
+                mask = {};
+                for(let i in templateMask) mask[i] = templateMask[i].checked;
+                mask.path = mask.coordinates;
+            }
+
+            socket.emit(
+                'addData',
+                'StorylineInfo' + (category ? 'Category' : 'Entity'),
+                {name:nameInput.value},
+                {
+                    loose: !Boolean(parentCategory),
+                    generalInfo: false,
+                    parentId: parentCategory ? parentCategory.id : this.id,
+                    template,
+                    templateMask: mask
+                }
+            );
+
+            popup.close();
+        }
+
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Create', className:'add_commit_button', onclick: ()=>commit()}));
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Cancel', className:'add_commit_button', onclick: ()=>popup.close()}));
+        
+        popup.open([wrapper]);
     }
 }
 
@@ -2566,16 +2940,19 @@ class BoardEntity {
 })();
 
 /* TODO/NOTES:
-- entity specifics: cells display system
-- notes (extra entity type, children of player)
-- adding elements
-- value system (show value of itemEffects)
+- value system (also show value of itemEffects) & cells display system
 - transfering items
 - initializing discord user
 - settings
 - music
 - discord bot (roles, announcement notifications)
 - map system
+
+
+ISSUES:
+- creating new player from template -> not copying effect mappings correctly
+
+PLANS:
 
 - copyright wall (with password one time entered -> saved as cookie (note that password is provided on discord in welcome channel))
 
@@ -2589,7 +2966,7 @@ class BoardEntity {
         - General: Dark Mode, Category Body Left Offset (in pixel for CSS), add new elements on top/bottom, enable adding elements to categories directly ("Paul mode"), 
                 default behaviour when leaving edit mode (save/cancel)
                 Undo Protocol length/Undo/Redo (show protocol in foldable section (display Entity type, name and parameters and parameter values before and after on hover))
-        - Storyline: switch storyline, visibility of player entities, DM mode (activates visibility of protected entities)
+        - Storyline: switch storyline, visibility of player entities, removing storyline info types, DM mode (activates visibility of protected entities)
         - Discord: announcement notifications (see below)
 
 - tree-like music playlist system (just with category system) containing any supported service, enable user to move any sub-folder into playing tracks (no loose songs on root level)
