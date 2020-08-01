@@ -2,6 +2,10 @@
 
 const _ = undefined;
 
+var getParameters = location.search ? Object.fromEntries(location.search.substr(1).split("&").map(x => x.split("="))) : {};
+if(location.search) history.pushState(null, '', '.');
+
+
 document.createNode = function(tag, properties, style){
     var elem = document.createElement(tag);
     for(let attr in properties){
@@ -178,7 +182,7 @@ function parseMarkup(string){
 }
 
 function getReferenceName(name){
-    return name.toLowerCase().replace(/[°\^\!"%&\/\(\)=\?\{\}\[\]\\\*\+\~'#\-:.;,\<\>\|]/g,'').replace(/ +/g,'_');
+    return name.toLowerCase().replace(/[°\^\!"%&\/\(\)=\?\{\}\[\]\\\*\+\~'#\-:\.;,\<\>\|]/g,'').replace(/ +/g,'_');
 }
 
 async function uploadImage(file, tags){
@@ -208,7 +212,13 @@ function addStyleRule(name, text){
 
 addStyleRule('entityContainer','.entity_container{}');
 addStyleRule('categoryContainer','.category_container{}');
-addStyleRule('categoryBody','.category_body{margin-left: 15px;}'); // TODO: read actual value from localStorage
+if(!localStorage.getItem('pnp_category_indent')) localStorage.setItem('pnp_category_indent',15);
+addStyleRule('categoryBody','.category_body{margin-left: '+localStorage.getItem('pnp_category_indent')+'px;}');
+addStyleRule('skillLearned','.skill_learned{}');
+addStyleRule('skillNotLearned','.skill_not_learned{}');
+addStyleRule('addElementCategory',
+    localStorage.getItem('pnp_pauls_mode') == '0' ? '.add_element_category{display:none;}' : '.add_element_category{}'
+);
 
 
 var loadPromises = {};
@@ -217,7 +227,8 @@ for(let property of ['socket', 'body']){
     loadPromises[property].loaded = new Promise(resolve => {loadPromises[property].resolve = resolve});
 }
 
-var socket = io('localhost:8081'); // replace with: https://foramitti.com:8081
+// var socket = io('https://foramitti.com:8081');
+var socket = io('localhost:8081');
 
 socket.on('err',(err, ...args)=>alert('Error: '+err+ (args.length ? '\n\n---------------\n\n'+args.map(x => JSON.stringify(x)).join('\n\n') : '')));
 
@@ -226,6 +237,197 @@ else socket.on('connect', loadPromises.socket.resolve);
 
 if(document.readyState == 'complete') loadPromises.body.resolve();
 else window.onload = loadPromises.body.resolve;
+
+
+const device = {
+    init(){
+        var os = [
+            { name: 'Windows Phone', value: 'Windows Phone', version: 'OS' },
+            { name: 'Windows', value: 'Win', version: 'NT' },
+            { name: 'iPhone', value: 'iPhone', version: 'OS' },
+            { name: 'iPad', value: 'iPad', version: 'OS' },
+            { name: 'Kindle', value: 'Silk', version: 'Silk' },
+            { name: 'Android', value: 'Android', version: 'Android' },
+            { name: 'PlayBook', value: 'PlayBook', version: 'OS' },
+            { name: 'BlackBerry', value: 'BlackBerry', version: '/' },
+            { name: 'Macintosh', value: 'Mac', version: 'OS X' },
+            { name: 'Linux', value: 'Linux', version: 'rv' },
+            { name: 'Palm', value: 'Palm', version: 'PalmOS' }
+        ];
+        var browser = [
+            { name: 'Chrome', value: 'Chrome', version: 'Chrome' },
+            { name: 'Firefox', value: 'Firefox', version: 'Firefox' },
+            { name: 'Safari', value: 'Safari', version: 'Version' },
+            { name: 'Internet Explorer', value: 'MSIE', version: 'MSIE' },
+            { name: 'Opera', value: 'Opera', version: 'Opera' },
+            { name: 'BlackBerry', value: 'CLDC', version: 'CLDC' },
+            { name: 'Mozilla', value: 'Mozilla', version: 'Mozilla' }
+        ];
+        var header = [
+            navigator.platform,
+            navigator.userAgent,
+            navigator.appVersion,
+            navigator.vendor,
+            window.opera
+        ];
+
+        function matchItem(string, data) {
+            var i = 0,
+                j = 0,
+                html = '',
+                regex,
+                regexv,
+                match,
+                matches,
+                version;
+            
+            for (i = 0; i < data.length; i += 1) {
+                regex = new RegExp(data[i].value, 'i');
+                match = regex.test(string);
+                if (match) {
+                    regexv = new RegExp(data[i].version + '[- /:;]([\\d._]+)', 'i');
+                    matches = string.match(regexv);
+                    version = '';
+                    if (matches) { if (matches[1]) { matches = matches[1]; } }
+                    if (matches) {
+                        matches = matches.split(/[._]+/);
+                        for (j = 0; j < matches.length; j += 1) {
+                            if (j === 0) {
+                                version += matches[j] + '.';
+                            } else {
+                                version += matches[j];
+                            }
+                        }
+                    } else {
+                        version = '0';
+                    }
+                    return {
+                        name: data[i].name,
+                        version: parseFloat(version)
+                    };
+                }
+            }
+            return { name: 'unknown', version: 0 };
+        }
+
+        var agent = header.join(' ');
+        this.os = matchItem(agent, os);
+        this.browser = matchItem(agent, browser);
+    },
+
+    os: { name: 'unknown', version: 0 },
+    browser: { name: 'unknown', version: 0 },
+};
+device.init();
+
+const notifications = {
+    available: false,
+    token: null,
+
+    async subscribe(){
+        if(!this.available) throw new Error('Notifications are not available');
+        await this.onready;
+        try{
+            let token = await firebase.messaging().getToken();
+            if(discordUser){
+                if(localStorage.getItem('pnp_push_token') != token)
+                    socket.emit('notifications_unsubscribePush', discordUser._id, localStorage.getItem('pnp_push_token'));
+                localStorage.setItem('pnp_push_token',token);
+                socket.emit('notifications_subscribePush', discordUser._id, localStorage.getItem('pnp_push_token'), {os: device.os, browser: device.browser});
+            }
+            this.token = token;
+        }
+        catch(e){
+            if(discordUser && localStorage.getItem('pnp_push_token')){
+                socket.emit('notifications_unsubscribePush', discordUser._id, localStorage.getItem('pnp_push_token'));
+            }
+            this.token = null;
+        }
+        return this.token;
+    },
+
+    unsubscribe(token){
+        if(discordUser){
+            if(token) socket.emit('notifications_unsubscribePush', discordUser._id, token);
+            else if(this.token) socket.emit('notifications_unsubscribePush', discordUser._id, this.token);
+        }
+    }
+}
+notifications.onready = new Promise(resolve => {notifications.ready = resolve});
+
+if("serviceWorker" in navigator){
+    notifications.available = true;
+    navigator?.serviceWorker?.register('service-worker.js')
+    .then(reg => {
+        var serviceWorker;
+        if (reg.installing) {
+            serviceWorker = reg.installing;
+        } else if (reg.waiting) {
+            serviceWorker = reg.waiting;
+        } else if (reg.active) {
+            serviceWorker = reg.active;
+        }
+
+        if(serviceWorker) {
+            if(serviceWorker.state == "activated") {
+                //If push subscription wasnt done yet have to do here
+                firebase.messaging().useServiceWorker(reg);
+                notifications.ready();
+            }
+            serviceWorker.addEventListener("statechange", function(e) {
+                if (e.target.state == "activated") {
+                    // use pushManger for subscribing here.
+                    firebase.messaging().useServiceWorker(reg);
+                    notifications.ready();
+                }
+            });
+        }
+    })
+    .catch(error => {
+        notifications.available = false;
+        console.error('Failed registering service worker: ', error);
+    });
+}
+
+var discordUser;
+function onDiscordUserLoaded(){
+    socket.on('updateDiscordUser_'+discordUser._id, newUser => {
+        if(newUser) discordUser = newUser;
+    });
+
+    if(localStorage.getItem('pnp_push_token') && !discordUser.notifications.web.map(x => x.token).includes(localStorage.getItem('pnp_push_token')))
+        localStorage.getItem('pnp_push','0');
+    if(parseInt(localStorage.getItem('pnp_push'))) notifications.subscribe();
+}
+
+function initDiscord(){
+    if(getParameters.init.length <= 15 || getParameters.init.length > 30) return alert('invalid discord id');
+    let halves = [getParameters.init.slice(0,15),getParameters.init.slice(15)];
+    if(parseInt(halves[0]) != halves[0] || parseInt(halves[1]) != halves[1]) return alert('invalid discord id');
+    socket.on('serveDiscordUser', user => {
+        if(!user) return alert('invalid discord id');
+        localStorage.setItem('pnp_discord_id', getParameters.init);
+        discordUser = user;
+
+        onDiscordUserLoaded();
+    });
+    socket.emit('requestDiscordUser', getParameters.init);
+}
+
+if(getParameters.init) initDiscord();
+else if(localStorage.getItem('pnp_discord_id')){
+    socket.on('serveDiscordUser', user => {
+        if(!user){
+            localStorage.removeItem('pnp_discord_id');
+            return alert('saved discord id is invalid');
+        }
+        discordUser = user;
+
+        onDiscordUserLoaded();
+    });
+    socket.emit('requestDiscordUser', localStorage.getItem('pnp_discord_id'));
+}
+
 
 async function socketRequestData(collection, id){
     return await (new Promise(resolve => {
@@ -279,7 +481,27 @@ var objectSets = {
 };
 var currentStoryline;
 
-var storylineSelectionWrapper = document.createNode('div',{className:'content_section'});
+var loadingResolves = {
+    Storyline: new Map(),
+    StorylineInfoType: new Map(),
+    StorylineInfoEntity: new Map(),
+    PlayerEntity: new Map(),
+    ItemEntity: new Map(),
+    ItemEffectEntity: new Map(),
+    SkillEntity: new Map(),
+    CellEntity: new Map(),
+    NoteEntity: new Map(),
+    StorylineInfoCategory: new Map(),
+    ItemCategory: new Map(),
+    ItemEffectCategory: new Map(),
+    SkillCategory: new Map(),
+    CellCategory: new Map(),
+    NoteCategory: new Map(),
+    BoardEnvironment: new Map(),
+    BoardEntity: new Map()
+};
+
+var storylineSelectionWrapper = document.createNode('div',{className:'content_section category_head'});
 storylineSelectionWrapper.appendChild(document.createNode('h2',{innerHTML:'Switch storyline: '}));
 var storylineSelection = storylineSelectionWrapper.appendChild(document.createNode('select',{onchange: async function(){
     if(this.value == currentStoryline.id) return;
@@ -298,11 +520,38 @@ socket.on('serveData_storylineNames', names => {
     }
 });
 
-
 (async function(){
     await loadPromises.socket.loaded;
     socket.emit('requestData_storylineNames');
 })();
+
+
+var skillFilter = document.createNode('div',{className:'content_section category_head', innerHTML:'Filter:&nbsp;'});
+(function(){
+    var skillFilterDropdown = skillFilter.appendChild(document.createNode('select',{
+        onchange: function(){
+            switch(this.value){
+                case 'all':
+                    styleRules.skillLearned.style.display = '';
+                    styleRules.skillNotLearned.style.display = '';
+                    break;
+                case 'learned':
+                    styleRules.skillLearned.style.display = '';
+                    styleRules.skillNotLearned.style.display = 'none';
+                    break;
+                case 'notLearned':
+                    styleRules.skillLearned.style.display = 'none';
+                    styleRules.skillNotLearned.style.display = '';
+                    break;
+            }
+        }
+    }));
+    skillFilterDropdown.appendChild(document.createNode('option',{value:'all', innerHTML:'All'}));
+    skillFilterDropdown.appendChild(document.createNode('option',{value:'learned', innerHTML:'Only learned'}));
+    skillFilterDropdown.appendChild(document.createNode('option',{value:'notLearned', innerHTML:'Only not learned'}));
+})();
+
+
 
 var addMenu = {
     opened: false,
@@ -350,6 +599,15 @@ const popup = {
     }
 }
 
+var settings = {
+    menuTabs: {
+        general: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'General',onclick: ()=>Storyline.openSettingsTab('general')}),
+        storyline: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Storyline',onclick: ()=>Storyline.openSettingsTab('storyline')}),
+        notifications: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Notifications',onclick: ()=>Storyline.openSettingsTab('notifications')})
+    }
+
+    // TODO: move openSettingsTab here; replace dynamic loading system by static nodes, which are updated
+};
 
 class Storyline {
     constructor(id){
@@ -476,6 +734,7 @@ class Storyline {
         // load storyline data via websocket
         socket.on('updateData_Storyline_'+this.id, (data) => this.update(data));
         await this.update(await socketRequestData('Storyline', this.id));
+        if(loadingResolves.Storyline.get(this.id)) for(let x of loadingResolves.Storyline.get(this.id)) x(this);
         return this;
     }
 
@@ -739,7 +998,8 @@ class Storyline {
                     generalInfo: true,
                     parentId: this.id,
                     template,
-                    templateMask: mask
+                    templateMask: mask,
+                    position: localStorage.getItem('pnp_new_element_position') == 'top' ? 0 : undefined
                 }
             );
 
@@ -751,6 +1011,255 @@ class Storyline {
         
         popup.open([wrapper]);
     }
+
+    static openSettingsTab(tab){
+        if(tab == undefined){
+            let activePrimaries = document.getElementsByClassName('primary_menu_active');
+            for(let x of activePrimaries) x.classList?.remove('primary_menu_active');
+            document.getElementById('menu_settings').classList?.add('primary_menu_active');
+
+            document.getElementById('secondary_menu').innerHTML = '';
+            document.getElementById('secondary_menu').appendChild(settings.menuTabs.general);
+            document.getElementById('secondary_menu').appendChild(settings.menuTabs.storyline);
+            document.getElementById('secondary_menu').appendChild(settings.menuTabs.notifications);
+            document.getElementById('secondary_menu').style.display = '';
+
+            document.getElementById('tertiary_menu').style.display = 'none';
+        }
+
+        let activeSecondaries = document.getElementsByClassName('secondary_menu_active');
+        for(let x of activeSecondaries) x.classList?.remove('secondary_menu_active');
+        settings.menuTabs[tab ?? 'general'].classList?.add('secondary_menu_active');
+
+        let mainContent = document.getElementById('main_content');
+        mainContent.innerHTML = '';
+        if(tab == 'general' || tab == undefined){
+            let root = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
+            root.appendChild(document.createNode('h2',{innerHTML:'General Settings'}));
+            let grid = root.appendChild(document.createNode('div',{className:'settings_grid'}));
+
+            grid.appendChild(document.createNode('div',{innerHTML:'Theme:&nbsp;'}));
+            let themeSelect = grid.appendChild(document.createNode('div'))
+            .appendChild(document.createNode('select',{onchange: function(){
+                localStorage.setItem('pnp_theme',this.value);
+                document.body.className = this.value;
+            }}));
+            themeSelect.appendChild(document.createNode('option',{innerHTML:'Dark',value:'dark'}));
+            themeSelect.appendChild(document.createNode('option',{innerHTML:'Light',value:'light'}));
+
+            if(!localStorage.getItem('pnp_theme')) localStorage.setItem('pnp_theme','dark');
+            themeSelect.value = localStorage.getItem('pnp_theme');
+
+            grid.appendChild(document.createNode('div',{innerHTML:'Position of new elements:&nbsp;'}));
+            let positionSelect = grid.appendChild(document.createNode('div'))
+            .appendChild(document.createNode('select',{onchange: function(){
+                localStorage.setItem('pnp_new_element_position',this.value);
+            }}));
+            positionSelect.appendChild(document.createNode('option',{innerHTML:'Top',value:'top'}));
+            positionSelect.appendChild(document.createNode('option',{innerHTML:'Bottom',value:'bottom'}));
+
+            if(!localStorage.getItem('pnp_new_element_position')) localStorage.setItem('pnp_new_element_position','bottom');
+            positionSelect.value = localStorage.getItem('pnp_new_element_position');
+
+            if(!localStorage.getItem('pnp_pauls_mode')) localStorage.setItem('pnp_pauls_mode','1');
+            grid.appendChild(document.createNode('div',{innerHTML:'Adding elements to categories directly (Paul\'s mode):&nbsp;'}));
+            grid.appendChild(document.createNode('div',{}))
+            .appendChild(document.createNode('input',{
+                type: 'checkbox',
+                checked: parseInt(localStorage.getItem('pnp_pauls_mode')),
+                onchange: function(){
+                    localStorage.setItem('pnp_pauls_mode',this.checked * 1);
+                    styleRules.addElementCategory.style.display = this.checked ? '' : 'none';
+                }
+            }));
+
+
+            grid.appendChild(document.createNode('div',{innerHTML:'Clicking outside while in edit mode:&nbsp;'}));
+            let exitEditSelect = grid.appendChild(document.createNode('div'))
+            .appendChild(document.createNode('select',{onchange: function(){
+                localStorage.setItem('pnp_exit_edit',this.value);
+                exitEditBehaviour = this.value;
+            }}));
+            exitEditSelect.appendChild(document.createNode('option',{innerHTML:'stay in edit mode',value:'stay'}));
+            exitEditSelect.appendChild(document.createNode('option',{innerHTML:'exit and discard changes',value:'cancelEdit'}));
+            exitEditSelect.appendChild(document.createNode('option',{innerHTML:'exit and save changes',value:'saveEdit'}));
+
+            if(!localStorage.getItem('pnp_exit_edit')) localStorage.setItem('pnp_exit_edit','saveEdit');
+            exitEditSelect.value = localStorage.getItem('pnp_exit_edit');
+
+
+            if(!localStorage.getItem('pnp_category_indent')) localStorage.setItem('pnp_category_indent',15);
+            grid.appendChild(document.createNode('div',{innerHTML:'Category indent:&nbsp;'}));
+            let categoryIndent = grid.appendChild(document.createNode('div'));
+            categoryIndent.appendChild(document.createNode('input',{
+                type: 'number',
+                min: 0,
+                step: 1,
+                value: localStorage.getItem('pnp_category_indent'),
+                onchange: function(){
+                    if(parseInt(this.value) >= 0){
+                        localStorage.setItem('pnp_category_indent',this.value);
+                        styleRules.categoryBody.style.marginLeft = this.value + 'px';
+                    }
+                }
+            }));
+            categoryIndent.appendChild(document.createTextNode(' pixel'));
+        }
+
+        else if(tab == 'storyline'){
+            mainContent.appendChild(storylineSelectionWrapper);
+            storylineSelection.value = currentStoryline.id;
+            // TODO: update settings when storyline switched (prob best just reopen settings)
+
+            let root = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
+            root.appendChild(document.createNode('h2',{innerHTML:'Storyline Settings'}));
+            let grid = root.appendChild(document.createNode('div',{className:'settings_grid'}));
+        }
+
+        else if(tab == 'notifications'){
+            if(!discordUser){
+                mainContent.appendChild(document.createNode('div',{
+                    className: 'content_section',
+                    innerHTML: 
+`This device is not yet associated with a discord user. To initialize this device follow these steps:
+<ol>
+<li>open Discord and navigate to the P&P server</li>
+<li>once on the server navigate to the text channel named 'bot'</li>
+<li>inside this channel type the message '?init' and send it</li>
+<li>shortly after the discord bot should reply with your initialization link</li>
+<li>open that link on this device</li>
+<li>you are all done</li>
+</ol>
+(If this message does not dissappear after you followed the above steps, it is most likely not your fault. Just hit me up and I will fix it)`
+                }));
+            }
+            else{
+                let root = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
+                root.appendChild(document.createNode('h2',{innerHTML:'Notification Settings'},{marginBottom: '5px'}));
+                root.appendChild(document.createNode('div',{
+                    innerHTML:
+`Here you can set additional ways of being notified about important announcements regarding game sessions (dates, etc.) besides the usual @everyone ping on the discord server.<br><br>
+You only get notifications for storylines you have declared to be part of by assigning yourself the respective role on the discord server.
+(e.g. you only get notifications for the storyline Ura Cycle 1, if you have assigned yourself the role ura-cycle-1 on discord; the voyeur role has no effect on notifications)<br>
+You can manage your roles via the bot command \'?role add/remove role_name\' in the bot channel. A list of all roles is available via the command 
+\'?roles\'. Your current roles are inspectible by clicking on your name or avater anywhere on the server (on the right side in the user list or above any of your messages)`
+                }));
+
+                let pushSection = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
+                pushSection.appendChild(document.createNode('h3',{innerHTML:'Push notifications'},{marginBottom: '10px'}));
+                /*push.appendChild(document.createNode('div',{
+                    innerHTML:
+`Push notifications are messages from apps that appear somewhere on the main screen even if the app is closed (mostly used on mobile phones, but also possible on PC).
+For this method of notifications to work you need to install this website as a Progressive Web Apps. This works different depending on your browser, 
+but it usually takes just one or two clicks. (Installation guide for most common browsers)<br>
+A PWA is not like a usual app, but rather just a downloaded website with a link on your home screen (like a real app). It takes up almost no space on your device and 
+can usually be deleted just by removing that link. The advantage of using this website as a PWA (besides having a quick link to it on you home screen) is that a light-weight 
+service worker can run in the background even if you don't have the website open and send you push notifications.`
+                },{marginBottom:'30px'}));*/
+                if(!localStorage.getItem('pnp_push')) localStorage.setItem('pnp_push','0');
+                let usePush = pushSection.appendChild(document.createNode('div',{innerHTML: 'Use push notifications on this device: '}));
+                if(notifications.available){
+                    usePush.appendChild(document.createNode('input',{
+                        type: 'checkbox',
+                        checked: parseInt(localStorage.getItem('pnp_push')),
+                        onchange: async function(){
+                            localStorage.setItem('pnp_push',this.checked * 1);
+                            if(this.checked){
+                                if(!(await notifications.subscribe())){
+                                    this.checked = false;
+                                    usePushError.innerHTML = ' Notifications were blocked by your browser. Please look into your browser settings.';
+                                    localStorage.setItem('pnp_push',0);
+                                }
+                            }
+                            else notifications.unsubscribe();
+                        }
+                    }));
+                    var usePushError = usePush.appendChild(document.createNode('span',_,{color:'red'}));
+                }
+                else{
+                    usePush.appendChild(document.createNode('span',{innerHTML:'Not available on this device'}));
+                }
+                if(discordUser.notifications.web.some(x => x.token != notifications.token)){
+                    pushSection.appendChild(document.createNode('div',{innerHTML:'Other devices:'},{marginTop: '10px'}));
+                    let pushOtherDevices = pushSection.appendChild(document.createNode('ul'));
+                    for(let x of discordUser.notifications.web){
+                        if(x.token == notifications.token) continue;
+                        let pushDevice = pushOtherDevices.appendChild(document.createNode('li',{
+                            innerHTML: x.device.os.name + ' ' + x.device.os.version + ', ' + x.device.browser.name + ' ' + x.device.browser.version
+                        }));
+                        pushDevice.appendChild(document.createNode('img',{
+                            src:'icons/bin-2.png',
+                            className:'icon remove_element_icon',
+                            onclick: ()=>{
+                                pushDevice.removeFromParent();
+                                notifications.unsubscribe(x.token);
+                            }
+                        }));
+                    }
+                }
+
+                function updateEmails(){
+                    let emails = emailInputs.map(x => x.children[0].value);
+                    for(let i=0;i<emails.length;i++){
+                        if(!emails[i].includes('@')){
+                            emails.splice(i,1);
+                            i--;
+                        }
+                    }
+                    if(!emails.equals(discordUser.notifications.email)) socket.emit('notifications_setEmails',discordUser._id, emails);
+                }
+
+                let emailSection = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
+                emailSection.appendChild(document.createNode('h3',{innerHTML:'E-Mail'},{marginBottom: '10px'}));
+                let emailInputSection = emailSection.appendChild(document.createNode('div'));
+                var emailInputs = [];
+                function addEmailInput(email){
+                    let emailElement = emailInputSection.appendChild(document.createNode('div'));
+                    emailElement.appendChild(document.createNode('input',{
+                        type: 'email',
+                        placeholder: 'john.doe@example.com',
+                        value: email ? email : '',
+                        onchange: ()=>updateEmails()
+                    }));
+                    emailElement.appendChild(document.createNode('img',{
+                        src:'icons/bin-2.png',
+                        className:'icon remove_element_icon',
+                        onclick: ()=>{
+                            emailElement.removeFromParent();
+                            emailInputs.splice(emailInputs.indexOf(emailElement),1);
+                            updateEmails();
+                        }
+                    }));
+
+                    emailInputs.push(emailElement);
+                }
+
+                for(let x of discordUser.notifications.email) addEmailInput(x);
+
+                emailSection.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+                .appendChild(document.createNode('div',{
+                    innerHTML:'+', 
+                    className:'add_element', 
+                    onclick: ()=>addEmailInput()
+                }));
+                
+
+                /*let telegram = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
+                telegram.appendChild(document.createNode('h3',{innerHTML:'Telegram'}));*/
+
+                let discordSection = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
+                discordSection.appendChild(document.createNode('h3',{innerHTML:'Discord'},{marginBottom: '10px'}));
+                discordSection.appendChild(document.createNode('div',{innerHTML: 'Get private message on discord: '}))
+                .appendChild(document.createNode('input',{
+                    type: 'checkbox',
+                    checked: discordUser.notifications.discord,
+                    onchange: async function(){
+                        socket.emit('notifications_setDiscordPM',discordUser._id, this.checked);
+                    }
+                }));
+            }
+        }
+    }
 }
 
 class Entity { // abstract
@@ -761,6 +1270,9 @@ class Entity { // abstract
         this.open = false;
         this.editing = false;
         this.type = this.constructor;
+
+        this.eventListeners = {};
+        this.eventListeners.inbound = new Map();
         
         this.deleteMessages = [
             'This will delete this element and remove all references to it in other elements. Are your sure you want to continue?',
@@ -838,7 +1350,15 @@ class Entity { // abstract
         this.dom.main.style.display = this.open ? '' : 'none';
     }
 
-    async update(data, changed){
+    subscribeEventListener(source, listener){
+        this.eventListeners.inbound.set(source, listener);
+    }
+
+    unsubscribeEventListener(source){
+        this.eventListeners.inbound.delete(source);
+    }
+
+    async update(data, domChanged){
         if(this.editing){
             function recursiveUpdateDataCash(cash, newData){
                 for(let i in newData){
@@ -874,22 +1394,22 @@ class Entity { // abstract
             this.description = data.description;
             this.dom.description.innerHTML = parseMarkup(this.description);
             this.dom.pureText.innerHTML = parseMarkup(this.description);
-            changed = true;
+            domChanged = true;
         }
 
         if(data.coordinates && (!this.coordinates || !this.coordinates.equals(data.coordinates))){
             this.coordinates = data.coordinates;
-            changed = true;
+            domChanged = true;
         }
 
         if(data.path!=undefined && this.path != data.path){
             this.dom.locationsLabel.innerHTML = this.path ? 'Path:' : (this.coordinates.length > 1) ? 'Locations:' : 'Location:';
-            changed = true;
+            domChanged = true;
         }
 
         if(data.images && !this.images?.equals(data.images)){
             this.images = data.images;
-            changed = true;
+            domChanged = true;
 
             if(this.images?.[0] != undefined){
                 this.dom.firstImage.src = 'loadImage.php?id='+this.images[0];
@@ -908,7 +1428,11 @@ class Entity { // abstract
             }
         }
 
-        if(changed) this.reloadDOMVisibility();
+        if(domChanged) this.reloadDOMVisibility();
+    }
+
+    fireChangeEvent(){
+        for(let x of this.eventListeners.inbound.values()) x();
     }
 
     reloadDOMVisibility(){
@@ -970,7 +1494,11 @@ class Entity { // abstract
 
     edit(){
         this.setEditing(true);
+        currentlyEditing?.cancelEdit();
         currentlyEditing = this;
+        document.getElementById('edit_overlay').style.display = 'initial';
+        for(let x of document.getElementsByClassName('currently_editing')) x.classList.remove('currently_editing');
+        this.dom.root.classList.add('currently_editing');
 
         this.editImages = this.images.slice();
         this.dom.imageEditSection.innerHTML = '';
@@ -1020,6 +1548,8 @@ class Entity { // abstract
     cancelEdit(){
         this.setEditing(false);
         currentlyEditing = null;
+        this.dom.root.classList.remove('currently_editing');
+        document.getElementById('edit_overlay').style.display = '';
 
         this.dom.name.innerHTML = this.name;
         this.dom.description.innerHTML = parseMarkup(this.description);
@@ -1131,6 +1661,7 @@ class StorylineInfoEntity extends Entity {
         socket.on('updateData_StorylineInfoEntity_'+this.id, (data) => this.update(data));
         const data = await socketRequestData('StorylineInfoEntity', this.id);
         await this.update(data);
+        if(loadingResolves.StorylineInfoEntity.get(this.id)) for(let x of loadingResolves.StorylineInfoEntity.get(this.id)) x(this);
         return this;
     }
 
@@ -1362,6 +1893,7 @@ class PlayerEntity extends Entity {
         socket.on('updateData_PlayerEntity_'+this.id, (data) => this.update(data));
         const data = await socketRequestData('PlayerEntity', this.id);
         await this.update(data);
+        if(loadingResolves.PlayerEntity.get(this.id)) for(let x of loadingResolves.PlayerEntity.get(this.id)) x(this);
         return this;
     }
 
@@ -1519,6 +2051,7 @@ class PlayerEntity extends Entity {
         }
         else{
             if(!this.dom[tab]) return;
+            if(tab == 'skills') document.getElementById('main_content').appendChild(skillFilter);
             document.getElementById('main_content').appendChild(this.dom[tab].root);
         }
     }
@@ -1697,7 +2230,8 @@ class PlayerEntity extends Entity {
                     loose: !Boolean(parentCategory),
                     parentId: parentCategory ? parentCategory.id : this.id,
                     template,
-                    templateMask: mask
+                    templateMask: mask,
+                    position: localStorage.getItem('pnp_new_element_position') == 'top' ? 0 : undefined
                 }
             );
 
@@ -1722,6 +2256,7 @@ class NoteEntity extends Entity {
         socket.on('updateData_NoteEntity_'+this.id, (data) => this.update(data));
         const data = await socketRequestData('NoteEntity', this.id);
         await this.update(data);
+        if(loadingResolves.NoteEntity.get(this.id)) for(let x of loadingResolves.NoteEntity.get(this.id)) x(this);
         return this;
     }
 
@@ -1749,6 +2284,7 @@ class ItemEntity extends Entity {
                     return;
                 }
                 this.amount = value;
+                this.fireChangeEvent();
                 socket.emit('updateData','ItemEntity',this.id,{amount:value});
             },
             onclick: e=>e.stopPropagation()
@@ -1770,6 +2306,7 @@ class ItemEntity extends Entity {
         socket.on('updateData_ItemEntity_'+this.id, (data) => this.update(data));
         const data = await socketRequestData('ItemEntity', this.id);
         await this.update(data);
+        if(loadingResolves.ItemEntity.get(this.id)) for(let x of loadingResolves.ItemEntity.get(this.id)) x(this);
         return this;
     }
 
@@ -1804,6 +2341,7 @@ class ItemEntity extends Entity {
         if(data.amount != undefined && this.amount != data.amount){
             this.amount = data.amount;
             this.dom.amount.value = this.amount;
+            this.fireChangeEvent();
         }
 
         return this;
@@ -1932,12 +2470,18 @@ class ItemEffectEntity extends Entity {
         super(id, parent, storyline);
         this.player = player;
         this.editItems = [];
+        this.value = 0;
+
+        this.eventListeners.outbound = new Map();
 
         this.dom.itemsLabel = this.dom.grid.appendChild(document.createNode('div',{innerHTML: 'Items:'},{display:'none'}));
         this.dom.itemsWrapper = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
         this.dom.items = this.dom.itemsWrapper.appendChild(document.createNode('div'));
         this.dom.itemsWrapper.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
         .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: ()=>this.addEditItemElement()}));
+
+        this.dom.valueLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML: 'Value:'}), this.dom.descriptionLabel);
+        this.dom.value = this.dom.grid.insertBefore(document.createNode('div',{innerHTML:'0'}), this.dom.descriptionLabel);
 
         objectSets.ItemEffectEntity.set(this.id, this);
     }
@@ -1947,6 +2491,7 @@ class ItemEffectEntity extends Entity {
         socket.on('updateData_ItemEffectEntity_'+this.id, (data) => this.update(data));
         const data = await socketRequestData('ItemEffectEntity', this.id);
         await this.update(data);
+        if(loadingResolves.ItemEffectEntity.get(this.id)) for(let x of loadingResolves.ItemEffectEntity.get(this.id)) x(this);
         return this;
     }
 
@@ -1980,9 +2525,39 @@ class ItemEffectEntity extends Entity {
 
         if(data.items && !this.items?.deepEquals(data.items)){
             this.items = data.items;
+            let itemIds = this.items.map(x => x.item);
+            for(let item of this.eventListeners.outbound.keys()){
+                if(!itemIds.includes(item.id)){
+                    item.unsubscribeEventListener(this);
+                    this.eventListeners.outbound.delete(item);
+                }
+            }
+            for(let itemId of itemIds){
+                let item = objectSets.ItemEntity.get(itemId);
+                if(!item){
+                    if(!loadingResolves.ItemEntity.has(itemId)) loadingResolves.ItemEntity.set(itemId, []);
+                    let item = await new Promise(resolve => {
+                        loadingResolves.ItemEntity.get(itemId).push(resolve);
+                    });
+                }
+                if(!this.eventListeners.outbound.has(item)){
+                    let listener = ()=>this.computeValue();
+                    item.subscribeEventListener(this, listener);
+                    this.eventListeners.outbound.set(item, listener);
+                }
+            }
+            this.computeValue();
         }
 
         return this;
+    }
+
+    computeValue(){
+        let value = 0;
+        for(let x of this.getItemsWithMultipliers()) value += x.mult * x.item.amount;
+        this.value = value;
+        this.dom.value.innerHTML = this.value;
+        this.fireChangeEvent();
     }
 
     getItems(){
@@ -2003,6 +2578,8 @@ class ItemEffectEntity extends Entity {
         super.edit();
         this.dom.itemsLabel.style.display = '';
         this.dom.itemsWrapper.style.display = '';
+        this.dom.valueLabel.style.display = 'none';
+        this.dom.value.style.display = 'none';
         this.editItems = [];
         this.dom.items.innerHTML = '';
         for(let x of this.items) this.addEditItemElement(x.item, x.mult);
@@ -2085,6 +2662,8 @@ class ItemEffectEntity extends Entity {
     reloadDOMVisibility(){
         this.dom.itemsLabel.style.display = 'none';
         this.dom.itemsWrapper.style.display = 'none';
+        this.dom.valueLabel.style.display = '';
+        this.dom.value.style.display = '';
 
         super.reloadDOMVisibility();
     }
@@ -2104,6 +2683,15 @@ class SkillEntity extends Entity {
             onchange: ()=>{
                 if(this.learned == this.dom.learned.checked) return;
                 this.learned = this.dom.learned.checked;
+                if(this.learned){
+                    this.dom.root.classList.remove('skill_not_learned');
+                    this.dom.root.classList.add('skill_learned');
+                }
+                else{
+                    this.dom.root.classList.remove('skill_learned');
+                    this.dom.root.classList.add('skill_not_learned');
+                }
+                this.fireChangeEvent();
                 socket.emit('updateData','SkillEntity',this.id,{learned:this.learned});
             }
         }));
@@ -2117,6 +2705,7 @@ class SkillEntity extends Entity {
         socket.on('updateData_SkillEntity_'+this.id, (data) => this.update(data));
         const data = await socketRequestData('SkillEntity', this.id);
         await this.update(data);
+        if(loadingResolves.SkillEntity.get(this.id)) for(let x of loadingResolves.SkillEntity.get(this.id)) x(this);
         return this;
     }
 
@@ -2150,7 +2739,16 @@ class SkillEntity extends Entity {
 
         if(data.learned != undefined && this.learned != data.learned){
             this.learned = data.learned;
+            if(this.learned){
+                this.dom.root.classList.remove('skill_not_learned');
+                this.dom.root.classList.add('skill_learned');
+            }
+            else{
+                this.dom.root.classList.remove('skill_learned');
+                this.dom.root.classList.add('skill_not_learned');
+            }
             this.dom.learned.checked = this.learned;
+            this.fireChangeEvent();
         }
 
         if(data.requirements != undefined && this.requirements != data.requirements){
@@ -2215,6 +2813,7 @@ class CellEntity extends Entity {
         socket.on('updateData_CellEntity_'+this.id, (data) => this.update(data));
         const data = await socketRequestData('CellEntity', this.id);
         await this.update(data);
+        if(loadingResolves.CellEntity.get(this.id)) for(let x of loadingResolves.CellEntity.get(this.id)) x(this);
         return this;
     }
 
@@ -2250,13 +2849,36 @@ class CellEntity extends Entity {
             this.cellType = data.cellType;
         }
 
-        if(data.value != undefined && this.value != data.value){
-            this.value = data.value;
+        let changed = false;
+
+        if(data.savedValue != undefined && this.savedValue != data.savedValue){
+            this.savedValue = data.savedValue;
+            changed = true;
         }
 
-        // TODO: other properties
+        if(data.valueFunction != undefined && this.valueFunction != data.valueFunction){
+            this.valueFunction = data.valueFunction;
+            changed = true;
+        }
+
+        if(data.resetFunction != undefined && this.resetFunction != data.resetFunction){
+            this.resetFunction = data.resetFunction;
+            changed = true;
+        }
+
+        if(data.offsetType != undefined && this.offsetType != data.offsetType){
+            this.offsetType = data.offsetType;
+            changed = true;
+        }
+
+        if(changed) this.computeValue();
 
         return this;
+    }
+
+    computeValue(){
+        
+        this.fireChangeEvent();
     }
 
     delete(){
@@ -2377,6 +2999,7 @@ class Category {
         socket.on('updateData_'+this.type.name+'_'+this.id, (data) => this.update(data));
         const data = await socketRequestData(this.type.name, this.id);
         this.update(data);
+        if(loadingResolves[this.type.name].get(this.id)) for(let x of loadingResolves[this.type.name].get(this.id)) x(this);
         return this;
     }
 
@@ -2443,7 +3066,11 @@ class Category {
 
     edit(){
         this.setEditing(true);
+        currentlyEditing?.cancelEdit();
         currentlyEditing = this;
+        document.getElementById('edit_overlay').style.display = 'initial';
+        for(let x of document.getElementsByClassName('currently_editing')) x.classList.remove('currently_editing');
+        this.dom.root.classList.add('currently_editing');
 
         this.dom.name.innerHTML = '';
         this.dom.input.name = this.dom.name.appendChild(document.createNode('input',{value: this.name.decodeHTML(), onclick: e => e.stopPropagation()}));
@@ -2469,6 +3096,8 @@ class Category {
     cancelEdit(){
         this.setEditing(false);
         currentlyEditing = null;
+        this.dom.root.classList.remove('currently_editing');
+        document.getElementById('edit_overlay').style.display = '';
 
         this.dom.name.innerHTML = this.name;
         
@@ -2883,7 +3512,8 @@ class StorylineInfoType {
                     generalInfo: false,
                     parentId: parentCategory ? parentCategory.id : this.id,
                     template,
-                    templateMask: mask
+                    templateMask: mask,
+                    position: localStorage.getItem('pnp_new_element_position') == 'top' ? 0 : undefined
                 }
             );
 
@@ -2905,8 +3535,14 @@ class BoardEntity {
 
 }
 
-(async function(){
+
+if(!localStorage.getItem('pnp_exit_edit')) localStorage.setItem('pnp_exit_edit','saveEdit');
+var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
+
+(async function onload(){
     await loadPromises.body.loaded;
+
+    if(localStorage.getItem('pnp_theme') == 'light') document.body.className = 'light';
 
     document.body.getHeight = function(){
 		var html = document.documentElement;
@@ -2927,25 +3563,32 @@ class BoardEntity {
         popup.close();
     }
 
-    document.body.onclick = e => {
-        addMenu.close();
-        if(currentlyEditing && e?.target && !currentlyEditing.dom.root.contains(e.target)) currentlyEditing?.saveEdit();
-    };
+    document.body.onclick = () => addMenu.close();
+
+    document.getElementById('edit_overlay').onclick = ()=>{
+        if(exitEditBehaviour != 'stay' && currentlyEditing) currentlyEditing[exitEditBehaviour]();
+    }
 
     if(!currentStoryline) currentStoryline = await (new Storyline(0)).init(); // TODO: change default storyline (and check localstorage)
     currentStoryline.openTab();
 
     document.getElementById('menu_storyline').onclick = () => currentStoryline.openTab();
     document.getElementById('menu_players').onclick = () => currentStoryline.openPlayer();
+    document.getElementById('menu_settings').onclick = () => Storyline.openSettingsTab();
+
+    if(getParameters.init){
+        Storyline.openSettingsTab();
+        Storyline.openSettingsTab('notifications');
+    }
+
+    document.getElementById('loading_overlay').style.display = 'none';
 })();
 
 /* TODO/NOTES:
-- value system (also show value of itemEffects) & cells display system
+- value system & cells display system
 - transfering items
-- initializing discord user
 - settings
 - music
-- discord bot (roles, announcement notifications)
 - map system
 
 
@@ -2956,30 +3599,24 @@ PLANS:
 
 - copyright wall (with password one time entered -> saved as cookie (note that password is provided on discord in welcome channel))
 
-- Cancel/Save Button when editing (cancelEdit method), default when clicking outside -> Save , but for safety:
 - Undo/Redo (only for own changes (but also sabe also before if it is not equivalent to last step) and only for changed parameters, but always safe last state before going back in protocol 
   to enable complete redo, even if the last step originated in a change from outside)
     - undo/redo via Ctrl+Z/Y or in Settings displaying whole protocol (and control protocol length)
 
 - Settings:
     - separate into sections (General, Storyline, Discord)
-        - General: Dark Mode, Category Body Left Offset (in pixel for CSS), add new elements on top/bottom, enable adding elements to categories directly ("Paul mode"), 
-                default behaviour when leaving edit mode (save/cancel)
-                Undo Protocol length/Undo/Redo (show protocol in foldable section (display Entity type, name and parameters and parameter values before and after on hover))
-        - Storyline: switch storyline, visibility of player entities, removing storyline info types, DM mode (activates visibility of protected entities)
-        - Discord: announcement notifications (see below)
+        - General: Undo Protocol length/Undo/Redo (show protocol in foldable section (display Entity type, name and parameters and parameter values before and after on hover))
+        - Storyline: visibility of player entities, removing storyline info types, DM mode (activates visibility of protected entities)
 
 - tree-like music playlist system (just with category system) containing any supported service, enable user to move any sub-folder into playing tracks (no loose songs on root level)
 - multiple tracks for music, always only one playing but easy to switch (can be filled with temporary songs or saved songs from playlists)
 - search feature for all music services to add new songs (with listen to first 10s feature)
 - services: Youtube, Soundcloud, Spotify, Epidimicsound
 - noisli-like ambience noise feature in addition to music
-- init discord user locally (in LocalStorage) for discord specific settings/features via separate site init/?id=... which then redirects directly to main site with settings
-- Anouncement notifications: mailing list, discord PMs, telegram PMs, RSS feed (sign up via Settings)
 
 - Board:
     - grid types: no grid, rectangle, hexagon (save entity positions with float, only snap to grid when moving or via button)
-    - enter radius to display it on grid (only when grid is active)
+    - enter moving radius to display it on grid (only when grid is active)
     - save backgrounds and entities -> easy menu to load them
     - menu to draw entities or load images for them and cut them out
 
