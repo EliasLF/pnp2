@@ -159,7 +159,7 @@ Object.defineProperty(Discord.Guild.prototype, "getRoles", {enumerable: false});
 
 
 function getReferenceName(name){
-    return name.toLowerCase().replace(/[°\^\!"%&\/\(\)=\?\{\}\[\]\\\*\+\~'#\-:\.;,\<\>\|]/g,'').replace(/ +/g,'_');
+    return name.toLowerCase().replace(/\s+/g,'_').replace(/[^\w]/g,'');
 }
 
 
@@ -1319,35 +1319,34 @@ io.on('connection', async (socket) => {
 
             if(data.protected != undefined) tmpData.protected = Boolean(data.protected);
 
-            if(data.name != undefined){
-                tmpData.name = data.name;
-                if(typeof tmpData.name != 'string') return error('name must be a string');
-            }
+            if(data.name != undefined) tmpData.name = String(data.name);
 
             if(collection.endsWith('Category') || collection == 'StorylineInfoType'){
                 if(data.entities != undefined){
                     tmpData.entities = data.entities;
-                    if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => !Number.isInteger(x)))
-                        return error('entities must be an array of numerical ids');
+                    if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => !Number.isInteger(x))){
+                        delete tmpData.entities;
+                        error('entities must be an array of numerical ids');
+                    }
                 }
                 
                 if(data.categories != undefined){
                     tmpData.categories = data.categories;
-                    if(!Array.isArray(tmpData.categories) || tmpData.categories.some(x => !Number.isInteger(x)))
-                        return error('categories must be an array of numerical ids');
+                    if(!Array.isArray(tmpData.categories) || tmpData.categories.some(x => !Number.isInteger(x))){
+                        delete tmpData.categories;
+                        error('categories must be an array of numerical ids');
+                    }
                 }
             }
             else if(collection.endsWith('Entity')){
-                if(data.description != undefined){
-                    tmpData.description = data.description;
-                    if(typeof tmpData.description != 'string') return error('description must be a string');
-                }
+                if(data.description != undefined) tmpData.description = String(data.description);
 
                 if(data.coordinates != undefined){
                     tmpData.coordinates = data.coordinates;
                     if(!Array.isArray(tmpData.coordinates) || 
                         tmpData.coordinates.some(x => (!Array.isArray(x) || x.length != 2 || x.some(y => typeof y != 'number')))){
-                            return error('coordinates must be an array of [x,y] objects filled with numbers');
+                            delete tmpData.coordinates;
+                            error('coordinates must be an array of [x,y] objects filled with numbers');
                     }
                 }
 
@@ -1355,8 +1354,10 @@ io.on('connection', async (socket) => {
 
                 if(data.images != undefined){
                     tmpData.images = data.images;
-                    if(!Array.isArray(tmpData.images) || tmpData.images.some(x => !Number.isInteger(x)))
-                        return error('images must be an array of numerical ids');
+                    if(!Array.isArray(tmpData.images) || tmpData.images.some(x => !Number.isInteger(x))){
+                        delete tmpData.images;
+                        error('images must be an array of numerical ids');
+                    }
                 }
             }
 
@@ -1364,29 +1365,34 @@ io.on('connection', async (socket) => {
                 case 'ItemEntity': 
                     if(data.amount != undefined){
                         tmpData.amount = data.amount;
-                        if(!Number.isInteger(tmpData.amount) || tmpData.amount < 0) return error('amount must be a positive integer');
+                        if(!Number.isInteger(tmpData.amount) || tmpData.amount < 0){
+                            delete tmpData.amount;
+                            error('amount must be a positive integer');
+                        }
                     }
                     break;
                 
                 case 'ItemEffectEntity': 
                     if(data.items != undefined){
                         tmpData.items = data.items;
-                        if(!Array.isArray(tmpData.items) || tmpData.items.some(x => typeof x != 'object' || typeof x.mult != 'number' || !Number.isInteger(x.item))) 
-                            return error('items must be an array of objects of form {mult: Float, item: Int[id]}');
+                        if(!Array.isArray(tmpData.items) || tmpData.items.some(x => typeof x != 'object' || typeof x.mult != 'number' || !Number.isInteger(x.item))) {
+                            delete tmpData.items;
+                            error('items must be an array of objects of form {mult: Float, item: Int[id]}');
+                        }
                     }
                     break;
                 
                 case 'SkillEntity': 
                     if(data.learned != undefined) tmpData.learned = Boolean(data.learned);
 
-                    if(data.requirements != undefined){
-                        tmpData.requirements = data.requirements;
-                        if(typeof tmpData.requirements != 'string') return error('requirements must be a string');
-                    }
+                    if(data.requirements != undefined) tmpData.requirements = String(data.requirements);
                     break;
                 
                 case 'CellEntity': 
-                    // TODO
+                    if(data.savedValue != undefined) tmpData.savedValue = data.savedValue;
+                    if(data.valueFunction != undefined) tmpData.valueFunction = String(data.valueFunction);
+                    if(data.resetFunction != undefined) tmpData.resetFunction = String(data.resetFunction);
+                    if(data.offsetAbsolute != undefined) tmpData.offsetAbsolute = Boolean(data.offsetAbsolute);
                     break;
                 
                 case 'PlayerEntity':
@@ -1394,16 +1400,22 @@ io.on('connection', async (socket) => {
                         if(data[property]?.entities != undefined){
                             if(!tmpData[property]) tmpData[property] = {};
                             tmpData[property].entities = data[property].entities;
-                            if(!Array.isArray(tmpData[property].entities) || tmpData[property].entities.some(x => !Number.isInteger(x)))
-                                return error(property+'.entities must be an array of numerical ids');
+                            if(!Array.isArray(tmpData[property].entities) || tmpData[property].entities.some(x => !Number.isInteger(x))){
+                                delete tmpData[property].entities;
+                                error(property+'.entities must be an array of numerical ids');
+                            }
                         }
                         
                         if(data[property]?.categories != undefined){
                             if(!tmpData[property]) tmpData[property] = {};
                             tmpData[property].categories = data[property].categories;
-                            if(!Array.isArray(tmpData[property].categories) || tmpData[property].categories.some(x => !Number.isInteger(x)))
-                                return error(property+'.categories must be an array of numerical ids');
+                            if(!Array.isArray(tmpData[property].categories) || tmpData[property].categories.some(x => !Number.isInteger(x))){
+                                delete tmpData[property].categories;
+                                error(property+'.categories must be an array of numerical ids');
+                            }
                         }
+
+                        if(tmpData[property] && !Object.keys(tmpData[property]).length) delete tmpData[property];
                     }
                     break;
                 
@@ -1411,41 +1423,55 @@ io.on('connection', async (socket) => {
                     if(data.info?.types != undefined){
                         if(!tmpData.info) tmpData.info = {};
                         tmpData.info.types = data.info.types;
-                        if(!Array.isArray(tmpData.info.types) || tmpData.info.types.some(x => !Number.isInteger(x))) 
-                            return error('info.types must be an array of numerical ids');
+                        if(!Array.isArray(tmpData.info.types) || tmpData.info.types.some(x => !Number.isInteger(x))){
+                            delete tmpData.info.types;
+                            error('info.types must be an array of numerical ids');
+                        }
                     }
                     if(data.info?.general != undefined){
                         if(!tmpData.info) tmpData.info = {};
                         tmpData.info.general = data.info.general;
-                        if(!Array.isArray(tmpData.info.general) || tmpData.info.general.some(x => !Number.isInteger(x))) 
-                            return error('info.general must be an array of numerical ids');
+                        if(!Array.isArray(tmpData.info.general) || tmpData.info.general.some(x => !Number.isInteger(x))) {
+                            delete tmpData.info.general;
+                            error('info.general must be an array of numerical ids');
+                        }
                     }
+                    if(tmpData.info && !Object.keys(tmpData.info).length) delete tmpData.info;
 
                     if(data.players?.entities != undefined){
                         if(!tmpData.players) tmpData.players = {};
                         tmpData.players.entities = data.players.entities;
-                        if(!Array.isArray(tmpData.players.entities) || tmpData.players.entities.some(x => !Number.isInteger(x))) 
-                            return error('players.entities must be an array of numerical ids');
+                        if(!Array.isArray(tmpData.players.entities) || tmpData.players.entities.some(x => !Number.isInteger(x))) {
+                            delete tmpData.players.entities;
+                        }
                     }
+                    if(tmpData.players && !Object.keys(tmpData.players).length) delete tmpData.players;
 
                     if(data.board?.entities != undefined){
                         if(!tmpData.board) tmpData.board = {};
                         tmpData.board.entities = data.board.entities;
-                        if(!Array.isArray(tmpData.board.entities) || tmpData.board.entities.some(x => !Number.isInteger(x))) 
-                            return error('board.entities must be an array of numerical ids');
+                        if(!Array.isArray(tmpData.board.entities) || tmpData.board.entities.some(x => !Number.isInteger(x))) {
+                            delete tmpData.board.entities;
+                            error('board.entities must be an array of numerical ids');
+                        }
                     }
                     if(data.board?.environments != undefined){
                         if(!tmpData.board) tmpData.board = {};
                         tmpData.board.environments = data.board.environments;
-                        if(!Array.isArray(tmpData.board.environments) || tmpData.board.environments.some(x => !Number.isInteger(x))) 
-                            return error('board.environments must be an array of numerical ids');
+                        if(!Array.isArray(tmpData.board.environments) || tmpData.board.environments.some(x => !Number.isInteger(x))) {
+                            delete tmpData.board.environments;
+                            error('board.environments must be an array of numerical ids');
+                        }
                     }
                     if(data.board?.activeEnvironment != undefined){
                         if(!tmpData.board) tmpData.board = {};
                         tmpData.board.activeEnvironment = data.board.activeEnvironment;
-                        if(!Number.isInteger(tmpData.board.activeEnvironment))
-                            return error('board.activeEnvironment must be a numerical id');
+                        if(!Number.isInteger(tmpData.board.activeEnvironment)){
+                            delete tmpData.board.activeEnvironment;
+                            error('board.activeEnvironment must be a numerical id');
+                        }
                     }
+                    if(tmpData.board && !Object.keys(tmpData.board).length) delete tmpData.board;
                     break;
             }
 
@@ -1523,10 +1549,9 @@ io.on('connection', async (socket) => {
             tmpData.protected = Boolean(data.protected);
 
             if(template?.name != undefined && (!templateMask || (templateMask.name ?? templateMaskDefault))) 
-                tmpData.name = template.name;
+                tmpData.name = String(template.name);
             else if(data.name == undefined) tmpData.name = '';
-            else tmpData.name = data.name;
-            if(typeof tmpData.name != 'string') return error('name must be a string');
+            else tmpData.name = String(data.name);
 
             if(collection.startsWith('Item') || collection.startsWith('Skill') || collection.startsWith('Cell')){
                 if(loose) tmpData.player = parentId;
@@ -1567,10 +1592,9 @@ io.on('connection', async (socket) => {
             }
             else if(collection.endsWith('Entity')){
                 if(template?.description != undefined && (!templateMask || (templateMask.description ?? templateMaskDefault))) 
-                    tmpData.description = template.description;
+                    tmpData.description = String(template.description);
                 else if(data.description == undefined) tmpData.description = '';
-                else tmpData.description = data.description;
-                if(typeof tmpData.description != 'string') return error('description must be a string');
+                else tmpData.description = String(data.description);
 
                 if(template?.coordinates && (!templateMask || (templateMask.coordinates ?? templateMaskDefault))) 
                     tmpData.coordinates = template.coordinates;
@@ -1623,14 +1647,55 @@ io.on('connection', async (socket) => {
                     else tmpData.learned = Boolean(data.learned);
 
                     if(template?.requirements != undefined && (!templateMask || (templateMask.requirements ?? templateMaskDefault))) 
-                        tmpData.requirements = template.requirements;
+                        tmpData.requirements = String(template.requirements);
                     else if(data.requirements == undefined) tmpData.requirements = '';
-                    else tmpData.requirements = data.requirements;
-                    if(typeof tmpData.requirements != 'string') return error('requirements must be a string');
+                    else tmpData.requirements = String(data.requirements);
                     break;
                 
                 case 'CellEntity': 
-                    // TODO: cell data sanitation and template handling
+                    if(template?.cellType != undefined && (!templateMask || (templateMask.cellType ?? templateMaskDefault))) 
+                        tmpData.cellType = String(template.cellType);
+                    else if(data.cellType == undefined) tmpData.cellType = 'static';
+                    else tmpData.cellType = String(data.cellType);
+                    let validCellTypes = ['dynamic', 'constant', 'static', 'control_number', 'control_button', 'control_text', 
+                        'control_checkbox', 'control_dropdown'];
+                    if(!validCellTypes.includes(tmpData.cellType)) return error('cellType must be one of the following: '+validCellTypes.join(', '));
+
+                    if(tmpData.cellType != 'constant' && tmpData.cellType != 'static' && tmpData.cellType != 'control_button'){
+                        if(template?.savedValue != undefined && (!templateMask || (templateMask.savedValue ?? templateMaskDefault))) 
+                            tmpData.savedValue = template.savedValue;
+                        else if(data.savedValue == undefined){
+                            if(tmpData.cellType == 'dynamic' || tmpData.cellType == 'control_number' || tmpData.cellType == 'control_dropdown') tmpData.savedValue = 0;
+                            else if(tmpData.cellType == 'control_text') tmpData.savedValue = '';
+                            else if(tmpData.cellType == 'control_checkbox') tmpData.savedValue = false;
+                        }
+                        else tmpData.savedValue = data.savedValue;
+
+                        if((tmpData.cellType == 'dynamic' || tmpData.cellType == 'control_number' || tmpData.cellType == 'control_dropdown') && typeof tmpData.savedValue != 'number') 
+                            return error('value for this cell type must be of type number');
+                        else if(tmpData.cellType == 'control_text') tmpData.savedValue = String(tmpData.savedValue);
+                        else if(tmpData.cellType == 'control_checkbox') tmpData.savedValue = Boolean(tmpData.savedValue);
+                    }
+
+                    if(tmpData.cellType == 'dynamic' || tmpData.cellType == 'constant' || tmpData.cellType == 'control_dropdown'){
+                        if(template?.valueFunction != undefined && (!templateMask || (templateMask.valueFunction ?? templateMaskDefault))) 
+                            tmpData.valueFunction = String(template.valueFunction);
+                        else if(data.valueFunction != undefined) tmpData.valueFunction = String(data.valueFunction);
+
+                        if(!tmpData.valueFunction) tmpData.valueFunction = '0';
+                    }
+
+                    if(tmpData.cellType == 'dynamic'){
+                        if(template?.resetFunction != undefined && (!templateMask || (templateMask.resetFunction ?? templateMaskDefault))) 
+                            tmpData.resetFunction = String(template.resetFunction);
+                        else if(data.resetFunction != undefined) tmpData.resetFunction = String(data.resetFunction);
+
+                        if(!tmpData.resetFunction) tmpData.resetFunction = '0';
+
+                        if(template?.offsetAbsolute != undefined && (!templateMask || (templateMask.offsetAbsolute ?? templateMaskDefault))) 
+                            tmpData.offsetAbsolute = Boolean(template.offsetAbsolute);
+                        else tmpData.offsetAbsolute = Boolean(data.offsetAbsolute);
+                    }
                     break;
                 
                 case 'PlayerEntity':

@@ -63,7 +63,7 @@
 		<div id="add_menu"></div>
 		<div id="popup_overlay"><div id="popup"></div></div>
 		<div id="edit_overlay"></div>
-		<div id="loading_overlay"><img id="loading" src="icons/loading.png"></div>
+		<div id="loading_overlay"><img loading="lazy" id="loading" src="icons/loading.png"></div>
         <div id="main">
             <div id="primary_menu" class="non_selectable">
 				<div id="menu_storyline">Storyline</div><!--
@@ -85,9 +85,6 @@
 		<!-- The core Firebase JS SDK is always required and must be listed first -->
 		<script src="https://www.gstatic.com/firebasejs/7.17.1/firebase-app.js"></script>
 
-		<!-- TODO: Add SDKs for Firebase products that you want to use
-			https://firebase.google.com/docs/web/setup#available-libraries -->
-		<script src="https://www.gstatic.com/firebasejs/7.17.1/firebase-analytics.js"></script>
 		<script src="https://www.gstatic.com/firebasejs/7.17.1/firebase-messaging.js"></script>
 
 		<script>
@@ -104,7 +101,6 @@
 		};
 		// Initialize Firebase
 		firebase.initializeApp(firebaseConfig);
-		firebase.analytics();
 		</script>
 
 		<script src="main.js"></script>

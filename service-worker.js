@@ -103,11 +103,14 @@ var version = {
 };
 
 self.addEventListener('install', e=> {
-    e.waitUntil(
-        caches.open('pnp-v1').then(cache => {
+    e.waitUntil(async ()=>{
+        await caches.delete('pnp-v1');
+        await caches.open('pnp-v1').then(cache => {
             version.recheck(true, false);
             return cache.addAll(toBeCached.flat());
-        })
+        });
+    }
+        
     );
 });
 

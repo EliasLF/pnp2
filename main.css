@@ -114,6 +114,21 @@ option{
 
 a{
     color: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+a:hover{
+    color: var(--font-color2);
+}
+
+code{
+    background-color: #1e1e1e;
+    color: #ccc;
+    border-radius: 4px;
+    padding: 2px 3px;
+    font-weight: bold;
+    white-space: nowrap;
 }
 
 .icon{
@@ -126,14 +141,40 @@ a{
     float: right;
     margin: 0;
     margin-left: 10px;
-    opacity: 0.5;
-    top: 2px;
     position: relative;
     cursor: pointer;
 }
 
+.edit_icon img, .delete_icon img, .draggable_icon img {
+    opacity: 0.5;
+}
+
 .draggable_icon{
     cursor: move!important;
+}
+
+.draggable_icon_compact, .edit_icon_compact, .delete_icon_compact{
+    position: absolute!important;
+    top: -7px;
+    line-height: 12.5px;
+    text-align: center;
+    width: 15px;
+    height: 15px;
+    background-color: var(--backgrnd-color2);
+    border: 1px solid var(--font-color3);
+    border-radius: 7.5px;
+}
+
+.draggable_icon_compact, .delete_icon_compact{
+    right: -7px;
+}
+
+.edit_icon_compact{
+    right: 15px;
+}
+
+.draggable_icon_compact img, .edit_icon_compact img, .delete_icon_compact img{
+    width: 9px!important;
 }
 
 .map_icon{
@@ -303,7 +344,6 @@ a{
     background-color: var(--backgrnd-color3);
     padding: 15px;
     margin-bottom: 10px;
-    overflow: auto;
 }
 
 .content_section > h2, .content_section > h3 {
@@ -313,6 +353,16 @@ a{
 
 .category, .entity{
     position: relative;
+}
+
+.entity_compact{
+    float: left;
+    margin-right: 15px!important;
+    margin-bottom: 15px!important;
+}
+
+.entity_error{
+    border: 2px solid red;
 }
 
 .content_image{
@@ -333,6 +383,11 @@ a{
     margin-bottom: 10px;
 }
 
+.entity_compact .first_content_image{
+    width:100%;
+    max-width: 300px;
+}
+
 @media screen and (max-width: 500px) {
     .first_content_image{
         width:100%;
@@ -345,13 +400,10 @@ a{
     overflow: auto;
     white-space: nowrap;
     width: 100%;
+    margin-top: 10px;
 }
 
-.content_text{
-    margin-bottom: 10px;
-}
-
-.content_text::after{
+.content_text::after, .entity_container::after, .add_element_wrapper::before, .category_head::after{
     content: "";
     display: block;
     clear: both;
@@ -367,8 +419,8 @@ a{
 
 .content_grid>div{
     padding: 10px;
-    border-bottom: 1px solid;
-    border-right: 1px solid;
+    border-bottom: 1px solid var(--font-color);
+    border-right: 1px solid var(--font-color);
 }
 
 .content_grid textarea{
@@ -405,6 +457,7 @@ a{
     float: right;
     display: none;
     margin-left: 10px;
+    margin-top: 10px;
 }
 
 .draggable-mirror{
@@ -521,12 +574,6 @@ a{
     margin-top: 0;
 }
 
-.add_popup_wrapper::after{
-    content: "";
-    display: block;
-    clear: both;
-}
-
 .add_popup_grid, .settings_grid{
     display: grid;
     grid-template-columns: auto 1fr;
@@ -551,4 +598,17 @@ a{
     cursor: pointer;
     margin-left: 10px;
     vertical-align: top;
+}
+
+.filter_bar{
+    text-align: right;
+    margin-bottom: 10px;
+}
+
+.cell_title_value{
+    display: inline-block;
+}
+
+.cell_title_value span, .cell_title_value input{
+    font: 400 13.3333px Arial;
 }

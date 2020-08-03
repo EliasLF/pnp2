@@ -17,6 +17,10 @@ document.createNode = function(tag, properties, style){
     return elem;
 };
 
+Number.prototype.toFixedMin = function(x){
+    return this.toFixed(x).replace(/0+$/,'').replace(/\.$/,'');
+}
+
 HTMLElement.prototype.removeFromParent = function(){
 	this.parentNode.removeChild(this);
 }
@@ -80,6 +84,11 @@ Object.defineProperty(String.prototype, "encodeHTML", {enumerable: false});
 Object.defineProperty(String.prototype, "decodeHTML", {enumerable: false});
 Object.defineProperty(String.prototype, "undefinedIndexOf", {enumerable: false});
 Object.defineProperty(String.prototype, "startsWithCount", {enumerable: false});
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 
 function parseMarkup(string){
     // list:
@@ -182,7 +191,7 @@ function parseMarkup(string){
 }
 
 function getReferenceName(name){
-    return name.toLowerCase().replace(/[°\^\!"%&\/\(\)=\?\{\}\[\]\\\*\+\~'#\-:\.;,\<\>\|]/g,'').replace(/ +/g,'_');
+    return name.toLowerCase().replace(/\s+/g,'_').replace(/[^\w]/g,'');
 }
 
 async function uploadImage(file, tags){
@@ -222,7 +231,7 @@ addStyleRule('addElementCategory',
 
 
 var loadPromises = {};
-for(let property of ['socket', 'body']){
+for(let property of ['socket', 'body', 'storylines']){
     loadPromises[property] = {};
     loadPromises[property].loaded = new Promise(resolve => {loadPromises[property].resolve = resolve});
 }
@@ -313,10 +322,14 @@ const device = {
         var agent = header.join(' ');
         this.os = matchItem(agent, os);
         this.browser = matchItem(agent, browser);
+        if(this.os.name == 'Windows Phone' || this.os.name == 'iPhone' || this.os.name == 'iPad' || this.os.name == 'Android'){
+            this.isPhone = true;
+        }
     },
 
     os: { name: 'unknown', version: 0 },
     browser: { name: 'unknown', version: 0 },
+    isPhone: false
 };
 device.init();
 
@@ -458,6 +471,8 @@ async function socketRequestDataImages(id, upperBound){
     }));
 }
 
+const CELL_DEBUG = false;
+
 var $ = {};
 var currentlyEditing = null;
 var objectSets = {
@@ -518,6 +533,8 @@ socket.on('serveData_storylineNames', names => {
     for(let [id, name] of names){
         storylineSelectionOptions.set(id, storylineSelection.appendChild(document.createNode('option',{value:id, innerHTML:name})));
     }
+    if(!localStorage.getItem('pnp_storyline')) localStorage.setItem('pnp_storyline',names[0][0]);
+    loadPromises.storylines.resolve();
 });
 
 (async function(){
@@ -526,7 +543,7 @@ socket.on('serveData_storylineNames', names => {
 })();
 
 
-var skillFilter = document.createNode('div',{className:'content_section category_head', innerHTML:'Filter:&nbsp;'});
+var skillFilter = document.createNode('div',{className:'filter_bar', innerHTML:'Filter:&nbsp;'});
 (function(){
     var skillFilterDropdown = skillFilter.appendChild(document.createNode('select',{
         onchange: function(){
@@ -608,6 +625,18 @@ var settings = {
 
     // TODO: move openSettingsTab here; replace dynamic loading system by static nodes, which are updated
 };
+
+class CircleDefinitionError extends Error{
+    constructor(definitionStack, message){
+        super(message);
+        this.definitionStack = definitionStack;
+    }
+
+    toString(){
+        if(this.message) return `${this.constructor.name}: ${this.message}, ${this.definitionStack.map(x => x.name).join(' > ')}`;
+        return `${this.constructor.name}: ${this.definitionStack.map(x => x.name).join(' > ')}`;
+    }
+}
 
 class Storyline {
     constructor(id){
@@ -1089,7 +1118,7 @@ class Storyline {
 
 
             if(!localStorage.getItem('pnp_category_indent')) localStorage.setItem('pnp_category_indent',15);
-            grid.appendChild(document.createNode('div',{innerHTML:'Category indent:&nbsp;'}));
+            grid.appendChild(document.createNode('div',{innerHTML:'Category indentation:&nbsp;'}));
             let categoryIndent = grid.appendChild(document.createNode('div'));
             categoryIndent.appendChild(document.createNode('input',{
                 type: 'number',
@@ -1124,8 +1153,8 @@ class Storyline {
 `This device is not yet associated with a discord user. To initialize this device follow these steps:
 <ol>
 <li>open Discord and navigate to the P&P server</li>
-<li>once on the server navigate to the text channel named 'bot'</li>
-<li>inside this channel type the message '?init' and send it</li>
+<li>once on the server navigate to the text channel named <code>bot</code></li>
+<li>inside this channel type the message <code>?init</code> and send it</li>
 <li>shortly after the discord bot should reply with your initialization link</li>
 <li>open that link on this device</li>
 <li>you are all done</li>
@@ -1140,22 +1169,34 @@ class Storyline {
                     innerHTML:
 `Here you can set additional ways of being notified about important announcements regarding game sessions (dates, etc.) besides the usual @everyone ping on the discord server.<br><br>
 You only get notifications for storylines you have declared to be part of by assigning yourself the respective role on the discord server.
-(e.g. you only get notifications for the storyline Ura Cycle 1, if you have assigned yourself the role ura-cycle-1 on discord; the voyeur role has no effect on notifications)<br>
-You can manage your roles via the bot command \'?role add/remove role_name\' in the bot channel. A list of all roles is available via the command 
-\'?roles\'. Your current roles are inspectible by clicking on your name or avater anywhere on the server (on the right side in the user list or above any of your messages)`
+(e.g. you only get notifications for the storyline Ura Cycle 1, if you have assigned yourself the role <code>ura-cycle-1</code> on discord; the voyeur role has no effect on notifications)<br>
+You can manage your roles via the bot command <code>?role add/remove role_name</code> in the bot channel. A list of all roles is available via the command 
+<code>?roles</code>. Your current roles are inspectible by clicking on your discord name or avatar anywhere on the server (on the right side in the user list or above any of your messages)`
                 }));
 
                 let pushSection = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
                 pushSection.appendChild(document.createNode('h3',{innerHTML:'Push notifications'},{marginBottom: '10px'}));
-                /*push.appendChild(document.createNode('div',{
+                let pushInfoSection = pushSection.appendChild(document.createNode('div',{
                     innerHTML:
-`Push notifications are messages from apps that appear somewhere on the main screen even if the app is closed (mostly used on mobile phones, but also possible on PC).
-For this method of notifications to work you need to install this website as a Progressive Web Apps. This works different depending on your browser, 
-but it usually takes just one or two clicks. (Installation guide for most common browsers)<br>
-A PWA is not like a usual app, but rather just a downloaded website with a link on your home screen (like a real app). It takes up almost no space on your device and 
-can usually be deleted just by removing that link. The advantage of using this website as a PWA (besides having a quick link to it on you home screen) is that a light-weight 
-service worker can run in the background even if you don't have the website open and send you push notifications.`
-                },{marginBottom:'30px'}));*/
+`Push notifications are messages from apps that appear somewhere on the main screen even if the app is closed. 
+This method <b><i>only reliably works on mobile devices</i></b> and after installing this website as a PWA 
+(which essentially just means creating a link to it on your homescreen taking two clicks (browser menu &#8594; 'add to home screen' or something similar depending on your browser))<br>
+If you are sceptical or want to know more:<br>`
+                },{marginBottom:'30px'}));
+                pushInfoSection.appendChild(document.createNode('a',{
+                    innerHTML: 'What is a PWA?',
+                    onclick: ()=>{
+                        // TODO: open popup with explanation
+                    }
+                }));
+                pushInfoSection.appendChild(document.createNode('br'));
+                pushInfoSection.appendChild(document.createNode('a',{
+                    innerHTML: 'How to install a PWA on my specific device?',
+                    onclick: ()=>{
+                        // TODO: open popup with explanation
+                    }
+                }));
+
                 if(!localStorage.getItem('pnp_push')) localStorage.setItem('pnp_push','0');
                 let usePush = pushSection.appendChild(document.createNode('div',{innerHTML: 'Use push notifications on this device: '}));
                 if(notifications.available){
@@ -1167,14 +1208,15 @@ service worker can run in the background even if you don't have the website open
                             if(this.checked){
                                 if(!(await notifications.subscribe())){
                                     this.checked = false;
-                                    usePushError.innerHTML = ' Notifications were blocked by your browser. Please look into your browser settings.';
+                                    usePushError.innerHTML = 'Notifications were blocked by your browser. Please look into your browser settings.';
                                     localStorage.setItem('pnp_push',0);
                                 }
+                                else usePushError.innerHTML = device.isPhone ? '' : 'Your device is not a mobile phone. This will probably not work reliably.';
                             }
                             else notifications.unsubscribe();
                         }
                     }));
-                    var usePushError = usePush.appendChild(document.createNode('span',_,{color:'red'}));
+                    var usePushError = usePush.appendChild(document.createNode('span',_,{color:'red',marginLeft:'5px'}));
                 }
                 else{
                     usePush.appendChild(document.createNode('span',{innerHTML:'Not available on this device'}));
@@ -1268,11 +1310,15 @@ class Entity { // abstract
         this.parent = parent;
         this.storyline = storyline;
         this.open = false;
+        this.foldable = true;
         this.editing = false;
         this.type = this.constructor;
+        this.finishedComputeValue = false;
+
+        this.images = [];
 
         this.eventListeners = {};
-        this.eventListeners.inbound = new Map();
+        this.eventListeners.inbound = new Set();
         
         this.deleteMessages = [
             'This will delete this element and remove all references to it in other elements. Are your sure you want to continue?',
@@ -1286,11 +1332,26 @@ class Entity { // abstract
         this.dom.input.saveEdit = document.createNode('button',{className:'save_edit_button', innerHTML:'Save', onclick:()=>this.saveEdit()});
 
         this.dom.icons = {};
-        this.dom.icons.draggable = this.dom.root.appendChild(document.createNode('img', {className: 'icon draggable_icon drag_handle_entity', src:'icons/draggable.svg', onmousedown:()=>{
-            this.toggleOpen(false);
-        }}));
-        this.dom.icons.edit = this.dom.root.appendChild(document.createNode('img', {className: 'icon edit_icon', src:'icons/pencil-2.png', onclick: ()=>this.edit()}));
-        this.dom.icons.delete = this.dom.root.appendChild(document.createNode('img', {className: 'icon delete_icon', src:'icons/bin-2.png', onclick: ()=>this.delete()}, {display:'none'}));
+        this.dom.icons.draggable = this.dom.root.appendChild(document.createNode('div', {
+            className: 'draggable_icon drag_handle_entity', 
+            onmousedown:()=>{
+                this.toggleOpen(false);
+            }
+        }));
+        this.dom.icons.draggable.appendChild(document.createNode('img', {className: 'icon', src:'icons/draggable.svg'}));
+
+        this.dom.icons.edit = this.dom.root.appendChild(document.createNode('div', {
+            className: 'edit_icon', 
+            onclick: ()=>this.edit()
+        }));
+        this.dom.icons.edit.appendChild(document.createNode('img', {className: 'icon', src:'icons/pencil-2.png'}));
+
+        this.dom.icons.delete = this.dom.root.appendChild(document.createNode('div', {
+            className: 'delete_icon', 
+            onclick: ()=>this.delete()
+        }, {display:'none'}));
+        this.dom.icons.delete.appendChild(document.createNode('img', {className: 'icon', src:'icons/bin-2.png'}));
+        
 
         this.dom.title = this.dom.root.appendChild(document.createNode('h3', {onclick: ()=>this.toggleOpen()}));
         this.dom.foldArrow = this.dom.title.appendChild(document.createNode('span', {className:'fold_arrow non_selectable', innerHTML: String.fromCharCode(9654)}));
@@ -1344,18 +1405,34 @@ class Entity { // abstract
     }
 
     toggleOpen(setValue){
+        if(!this.foldable) return;
         if(setValue == this.open) return;
         this.open = !this.open;
         this.dom.foldArrow.innerHTML = this.open ? String.fromCharCode(9660) : String.fromCharCode(9654);
         this.dom.main.style.display = this.open ? '' : 'none';
     }
 
-    subscribeEventListener(source, listener){
-        this.eventListeners.inbound.set(source, listener);
+    subscribeEventListener(source){
+        this.eventListeners.inbound.add(source);
     }
 
     unsubscribeEventListener(source){
         this.eventListeners.inbound.delete(source);
+    }
+
+    fireChangeEvent(){
+        for(let x of this.eventListeners.inbound.values()) x.prepareComputeValue();
+        for(let x of this.eventListeners.inbound.values()) x.computeValue();
+    }
+    
+    prepareComputeValue(){
+        this.finishedComputeValue = false;
+        for(let x of this.eventListeners.inbound.values()) x.prepareComputeValue();
+    }
+
+    computeValue(){
+        this.finishedComputeValue = true;
+        for(let x of this.eventListeners.inbound.values()) x.computeValue();
     }
 
     async update(data, domChanged){
@@ -1431,10 +1508,6 @@ class Entity { // abstract
         if(domChanged) this.reloadDOMVisibility();
     }
 
-    fireChangeEvent(){
-        for(let x of this.eventListeners.inbound.values()) x();
-    }
-
     reloadDOMVisibility(){
         if(this.type.name != 'PlayerEntity') this.dom.icons.draggable.style.display = '';
         this.dom.icons.edit.style.display = '';
@@ -1466,10 +1539,21 @@ class Entity { // abstract
                 x.style.display == 'none' || x == this.dom.descriptionLabel || x == this.dom.description)){
             this.dom.grid.style.display = 'none';
             this.dom.pureText.style.display = '';
+            if(!this.description && !this.images.length){
+                this.toggleOpen(false);
+                this.dom.foldArrow.style.display = 'none';
+                this.foldable = false;
+            }
+            else{
+                this.dom.foldArrow.style.display = '';
+                this.foldable = true;
+            }
         }
         else{
             this.dom.grid.style.display = '';
             this.dom.pureText.style.display = 'none';
+            this.foldable = true;
+            this.dom.foldArrow.style.display = '';
         }
     }
 
@@ -1493,6 +1577,7 @@ class Entity { // abstract
     }
 
     edit(){
+        this.foldable = true;
         this.setEditing(true);
         currentlyEditing?.cancelEdit();
         currentlyEditing = this;
@@ -1526,6 +1611,7 @@ class Entity { // abstract
 
         this.dom.input.saveEdit.style.display = 'initial';
         this.dom.input.cancelEdit.style.display = 'initial';
+        this.closeAfterEdit = !this.open;
         this.toggleOpen(true);
     }
 
@@ -1554,6 +1640,7 @@ class Entity { // abstract
         this.dom.name.innerHTML = this.name;
         this.dom.description.innerHTML = parseMarkup(this.description);
         this.reloadDOMVisibility();
+        if(this.closeAfterEdit) this.toggleOpen(false);
     }
 
     setEditing(value){
@@ -1675,6 +1762,8 @@ class StorylineInfoEntity extends Entity {
 class PlayerEntity extends Entity {
     constructor(id,parent){
         super(id, parent, parent);
+        this.toggleOpen(true);
+
         this.currentOpenTab = 'info';
         objectSets.PlayerEntity.set(this.id, this);
         this.item = {};
@@ -2271,6 +2360,7 @@ class ItemEntity extends Entity {
     constructor(id, parent, storyline, player){
         super(id, parent, storyline);
         this.player = player;
+        this.finishedComputeValue = true;
         objectSets.ItemEntity.set(this.id, this);
         
         this.dom.amount = this.dom.title.insertBefore(document.createNode('input',{
@@ -2284,6 +2374,7 @@ class ItemEntity extends Entity {
                     return;
                 }
                 this.amount = value;
+                this.value = value;
                 this.fireChangeEvent();
                 socket.emit('updateData','ItemEntity',this.id,{amount:value});
             },
@@ -2340,6 +2431,7 @@ class ItemEntity extends Entity {
 
         if(data.amount != undefined && this.amount != data.amount){
             this.amount = data.amount;
+            this.value = data.amount;
             this.dom.amount.value = this.amount;
             this.fireChangeEvent();
         }
@@ -2472,7 +2564,7 @@ class ItemEffectEntity extends Entity {
         this.editItems = [];
         this.value = 0;
 
-        this.eventListeners.outbound = new Map();
+        this.eventListeners.outbound = new Set();
 
         this.dom.itemsLabel = this.dom.grid.appendChild(document.createNode('div',{innerHTML: 'Items:'},{display:'none'}));
         this.dom.itemsWrapper = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
@@ -2526,7 +2618,7 @@ class ItemEffectEntity extends Entity {
         if(data.items && !this.items?.deepEquals(data.items)){
             this.items = data.items;
             let itemIds = this.items.map(x => x.item);
-            for(let item of this.eventListeners.outbound.keys()){
+            for(let item of this.eventListeners.outbound.values()){
                 if(!itemIds.includes(item.id)){
                     item.unsubscribeEventListener(this);
                     this.eventListeners.outbound.delete(item);
@@ -2536,16 +2628,16 @@ class ItemEffectEntity extends Entity {
                 let item = objectSets.ItemEntity.get(itemId);
                 if(!item){
                     if(!loadingResolves.ItemEntity.has(itemId)) loadingResolves.ItemEntity.set(itemId, []);
-                    let item = await new Promise(resolve => {
+                    item = await new Promise(resolve => {
                         loadingResolves.ItemEntity.get(itemId).push(resolve);
                     });
                 }
                 if(!this.eventListeners.outbound.has(item)){
-                    let listener = ()=>this.computeValue();
-                    item.subscribeEventListener(this, listener);
-                    this.eventListeners.outbound.set(item, listener);
+                    item.subscribeEventListener(this);
+                    this.eventListeners.outbound.add(item);
                 }
             }
+            this.prepareComputeValue();
             this.computeValue();
         }
 
@@ -2557,7 +2649,8 @@ class ItemEffectEntity extends Entity {
         for(let x of this.getItemsWithMultipliers()) value += x.mult * x.item.amount;
         this.value = value;
         this.dom.value.innerHTML = this.value;
-        this.fireChangeEvent();
+        
+        super.computeValue();
     }
 
     getItems(){
@@ -2806,6 +2899,30 @@ class CellEntity extends Entity {
         super(id, parent, storyline);
         this.player = player;
         objectSets.CellEntity.set(this.id, this);
+        this.dependencies = [];
+        this.value = 0;
+
+        this.eventListeners.outbound = new Set();
+
+        this.dom.root.classList.add('entity_compact');
+        this.dom.icons.draggable.classList.add('draggable_icon_compact');
+        this.dom.icons.edit.classList.add('edit_icon_compact');
+        this.dom.icons.delete.classList.add('delete_icon_compact');
+
+        this.dom.titleValue = this.dom.title.appendChild(document.createNode('div',{className: 'cell_title_value'}));
+
+        this.dom.errorLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML: 'Error:'}), this.dom.descriptionLabel);
+        this.dom.error = this.dom.grid.insertBefore(document.createNode('div',_,{color:'red'}), this.dom.descriptionLabel);
+
+        this.dom.valueFunctionLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML:'Value Function: '},{display:'none'}), this.dom.descriptionLabel);
+        this.dom.valueFunctionWrapper = this.dom.grid.insertBefore(document.createNode('div',_,{display:'none'}), this.dom.descriptionLabel);
+        this.dom.input.valueFunction = this.dom.valueFunctionWrapper.appendChild(document.createNode('textarea'));
+
+        this.dom.resetFunctionLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML:'Reset Function: '},{display:'none'}), this.dom.descriptionLabel);
+        this.dom.resetFunctionWrapper = this.dom.grid.insertBefore(document.createNode('div',_,{display:'none'}), this.dom.descriptionLabel);
+        this.dom.input.resetFunction = this.dom.resetFunctionWrapper.appendChild(document.createNode('textarea'));
+
+        this.resetError();
     }
     
     async init(){
@@ -2815,6 +2932,22 @@ class CellEntity extends Entity {
         await this.update(data);
         if(loadingResolves.CellEntity.get(this.id)) for(let x of loadingResolves.CellEntity.get(this.id)) x(this);
         return this;
+    }
+
+    async parseFunction(functionString, retry=0){
+        let matches = functionString.matchAll(/\$\.(\w+)\.(item|effect|skill|cell)\.(\w+)\./g);
+        let dependencies = [];
+        for(let match of matches){
+            $.this = this.player;
+            let dep = $[match[1]]?.[match[2]]?.[match[3]];
+            if(dep) dependencies.push(dep);
+            else if(retry >= 15) throw new Error(match[0] + ' not found after 5 retries');
+            else{
+                await sleep(1000);
+                return await this.parseFunction(functionString, retry+1);
+            }
+        }
+        return dependencies;
     }
 
     async update(data){
@@ -2845,40 +2978,359 @@ class CellEntity extends Entity {
         
         if(changedName) this.player.cell[this.referenceName] = this;
 
-        if(data.cellType != undefined && this.cellType != data.cellType){
+        if(this.cellType == undefined && data.cellType != undefined){
             this.cellType = data.cellType;
+            if(this.cellType == 'dynamic' || this.cellType == 'constant'){
+
+            }
+
+            switch(this.cellType){
+                case 'dynamic':
+                    this.dom.titleValue.appendChild(document.createTextNode(': '));
+                    this.dom.base = this.dom.titleValue.appendChild(document.createNode('span',{innerHTML:'loading...'}));
+                    this.dom.titleValue.appendChild(document.createNode('span',{innerHTML:' - '}));
+                    this.dom.value = this.dom.titleValue.appendChild(document.createNode('input',{
+                        type: 'number',
+                        step: 'any',
+                        value: 0,
+                        onchange: ()=>{
+                            let value = parseFloat(this.dom.value.value);
+                            if(Number.isNaN(value)){
+                                this.dom.value.value = this.offsetAbsolute ? this.savedValue : this.savedValue + this.base;
+                                return;
+                            }
+                            value = this.offsetAbsolute ? value : value - this.base;
+                            if(value != this.savedValue){
+                                this.savedValue = value;
+                                socket.emit('updateData', 'CellEntity', this.id, {savedValue: this.savedValue});
+                                this.prepareComputeValue();
+                                this.computeValue();
+                            }
+                        }
+                    }));
+                    break;
+                
+                case 'constant':
+                    this.dom.titleValue.appendChild(document.createTextNode(': '));
+                    this.dom.value = this.dom.titleValue.appendChild(document.createNode('span',{innerHTML:'loading...'}));
+                    break;
+                
+                case 'control_number':
+                    this.dom.titleValue.appendChild(document.createTextNode(': '));
+                    this.dom.value = this.dom.titleValue.appendChild(document.createNode('input',{
+                        type: 'number',
+                        step: 'any',
+                        value: 0,
+                        onchange: ()=>{
+                            let value = parseFloat(this.dom.value.value);
+                            if(Number.isNaN(value)){
+                                this.dom.value.value = this.savedValue;
+                                return;
+                            }
+                            if(value != this.savedValue){
+                                this.savedValue = value;
+                                socket.emit('updateData', 'CellEntity', this.id, {savedValue: this.savedValue});
+                                this.prepareComputeValue();
+                                this.computeValue();
+                            }
+                        }
+                    }));
+                    break;
+                
+                case 'control_text':
+                    this.dom.titleValue.appendChild(document.createTextNode(': '));
+                    this.dom.value = this.dom.titleValue.appendChild(document.createNode('input',{
+                        onchange: ()=>{
+                            let value = this.dom.value.value;
+                            if(value != this.savedValue){
+                                this.savedValue = value;
+                                socket.emit('updateData', 'CellEntity', this.id, {savedValue: this.savedValue});
+                                this.prepareComputeValue();
+                                this.computeValue();
+                            }
+                        }
+                    }));
+                    break;
+                
+                case 'control_button':
+                    this.value = false;
+                    this.dom.titleValue.appendChild(document.createTextNode(': '));
+                    this.dom.value = this.dom.titleValue.appendChild(document.createNode('button',{
+                        onclick: ()=>{
+                            this.value = true;
+                            this.prepareComputeValue();
+                            this.computeValue();
+                            this.value = false;
+                            this.prepareComputeValue();
+                            this.computeValue();
+                        }
+                    }));
+                    break;
+                
+                case 'control_checkbox':
+                    this.dom.titleValue.appendChild(document.createTextNode(': '));
+                    this.dom.value = this.dom.titleValue.appendChild(document.createNode('input',{
+                        type: 'checkbox',
+                        onchange: ()=>{
+                            let value = this.dom.value.checked;
+                            if(value != this.savedValue){
+                                this.savedValue = value;
+                                socket.emit('updateData', 'CellEntity', this.id, {savedValue: this.savedValue});
+                                this.prepareComputeValue();
+                                this.computeValue();
+                            }
+                        }
+                    }));
+                    break;
+            }
         }
 
         let changed = false;
+
+        if(data.offsetAbsolute != undefined && this.offsetAbsolute != data.offsetAbsolute){
+            this.offsetAbsolute = data.offsetAbsolute;
+            changed = true;
+        }
 
         if(data.savedValue != undefined && this.savedValue != data.savedValue){
             this.savedValue = data.savedValue;
             changed = true;
         }
 
+        let changedDependencies;
+
         if(data.valueFunction != undefined && this.valueFunction != data.valueFunction){
             this.valueFunction = data.valueFunction;
+            this.dom.input.valueFunction.value = this.valueFunction;
+            changedDependencies = true;
             changed = true;
         }
 
         if(data.resetFunction != undefined && this.resetFunction != data.resetFunction){
             this.resetFunction = data.resetFunction;
+            this.dom.input.resetFunction.value = this.resetFunction;
+            changedDependencies = true;
             changed = true;
         }
 
-        if(data.offsetType != undefined && this.offsetType != data.offsetType){
-            this.offsetType = data.offsetType;
-            changed = true;
+        if(changedDependencies){
+            this.dependencies = [];
+            this.resetError();
+            try{
+                if(this.valueFunction) this.dependencies.push(...(await this.parseFunction(this.valueFunction)));
+                if(this.resetFunction) this.dependencies.push(...(await this.parseFunction(this.resetFunction)));
+            }
+            catch(e){
+                this.setError(e);
+                return;
+            }
+
+            // check for circle definitions, deactivate if found
+            let circleDef = this.checkCircleDefinition(this);
+            if(circleDef){
+                this.setError(new CircleDefinitionError(circleDef));
+            }
+
+            // readjust eventListeners (match to this.dependencies)
+            for(let dep of this.eventListeners.outbound.values()){
+                if(!this.dependencies.includes(dep)){
+                    dep.unsubscribeEventListener(this);
+                    this.eventListeners.outbound.delete(dep);
+                }
+            }
+            for(let dep of this.dependencies){
+                if(!this.eventListeners.outbound.has(dep)){
+                    dep.subscribeEventListener(this);
+                    this.eventListeners.outbound.add(dep);
+                }
+            }
         }
 
-        if(changed) this.computeValue();
+        if(changed){
+            this.prepareComputeValue();
+            this.computeValue();
+        }
 
         return this;
     }
 
+    setError(error){
+        this.dependencies = [];
+        this.error = error;
+        this.dom.root.classList.add('entity_error');
+        this.dom.error.innerHTML = error.toString();
+        this.dom.errorLabel.style.display = '';
+        this.dom.error.style.display = '';
+        this.reloadDOMVisibility();
+    }
+
+    resetError(){
+        this.error = null;
+        this.dom.root.classList.remove('entity_error');
+        this.dom.errorLabel.style.display = 'none';
+        this.dom.error.style.display = 'none';
+        this.reloadDOMVisibility();
+    }
+
+    checkCircleDefinition(startObject, notFirst){
+        if(this == startObject && notFirst) return [this];
+        for(let x of this.dependencies){
+            if(x.constructor != CellEntity) continue;
+            if(x.error) continue;
+            let result = x.checkCircleDefinition(startObject, true);
+            if(result){
+                result.push(this);
+                return result;
+            }
+        }
+        return null;
+    }
+
+    prepareComputeValue(){
+        this.finishedComputeValue = true;
+        if(this.error){
+            if(this.error.constructor == CircleDefinitionError){
+                this.resetError();
+                let circleDef = this.checkCircleDefinition(this);
+                if(circleDef){
+                    this.setError(new CircleDefinitionError(circleDef));
+                    return;
+                }
+            }
+            else if(this.error.constructor == EvalError) this.resetError();
+            else return;
+        }
+        super.prepareComputeValue();
+    }
+
     computeValue(){
+        if(this.finishedComputeValue) return;
+        if(CELL_DEBUG) console.log(this.name, ', check children: ', this.dependencies.map(x => x.name));
+
+        for(let x of this.dependencies){
+            if(!x.finishedComputeValue) return !CELL_DEBUG || console.log(this.name, ', break since ', x.name, ' is not ready');
+        }
         
-        this.fireChangeEvent();
+        if(CELL_DEBUG) console.log(this.name, ', calculate');
+
+        if(this.cellType != 'control_button' && this.cellType.startsWith('control_'))
+            this.value = this.savedValue;
+        else if(this.cellType == 'dynamic'){
+            $.this = this.player;
+            try{
+                this.base = eval(this.valueFunction);
+            }
+            catch(e){
+                e.message += '(in the value function)'
+                this.setError(e);
+                this.base = 0;
+                this.dom.base.innerHTML = 'Err';
+                return;
+            }
+            if(typeof this.base != 'number'){
+                this.setError(new EvalError('value function does not return a number, returned: '+this.base+' of type '+(typeof this.base)));
+                this.base = 0;
+                this.dom.base.innerHTML = 'Err';
+                return;
+            }
+            if(Number.isNaN(this.base)){
+                this.setError(new EvalError('value function returns NaN'));
+                this.base = 0;
+                this.dom.base.innerHTML = 'Err';
+                return;
+            }
+            this.dom.base.innerHTML = this.base.toFixedMin(2);
+
+            let reset;
+            try{
+                reset = eval(this.resetFunction);
+            }
+            catch(e){
+                e.message += '(in the reset function)'
+                this.setError(e);
+                this.dom.base.innerHTML = 'Err';
+                return;
+            }
+            if(reset){
+                this.savedValue = this.offsetAbsolute ? this.base : 0;
+                socket.emit('updateData','CellEntity',this.id,{savedValue: this.savedValue});
+            }
+
+            this.value = this.offsetAbsolute ? this.savedValue : this.savedValue + this.base;
+            if(parseFloat(this.dom.value.value) != this.value) this.dom.value.value = this.value;
+        }
+        else if(this.cellType == 'constant'){
+            $.this = this.player;
+            try{
+                this.value = eval(this.valueFunction);
+            }
+            catch(e){
+                e.message += '(in the value function)'
+                this.setError(e);
+                this.value = 0;
+                this.dom.value.innerHTML = 'Err';
+                return;
+            }
+            if(typeof this.value != 'number'){
+                this.setError(new EvalError('value function does not return a number, returned: '+this.value+' of type '+(typeof this.value)));
+                this.value = 0;
+                this.dom.value.innerHTML = 'Err';
+                return;
+            }
+            if(Number.isNaN(this.value)){
+                this.setError(new EvalError('value function returns NaN'));
+                this.value = 0;
+                this.dom.value.innerHTML = 'Err';
+                return;
+            }
+            this.dom.value.innerHTML = this.value.toFixedMin(2);
+        }
+        
+        if(CELL_DEBUG) console.log(this.name, ', call super: ', Array.from(this.eventListeners.inbound.values()).map(x => x.name));
+        if(!this.error) super.computeValue();
+    }
+
+    edit(){
+        super.edit();
+
+        this.dom.titleValue.style.display = 'none';
+
+        if(this.cellType == 'dynamic'){
+            this.dom.valueFunctionLabel.style.display = '';
+            this.dom.valueFunctionWrapper.style.display = '';
+            this.dom.resetFunctionLabel.style.display = '';
+            this.dom.resetFunctionWrapper.style.display = '';
+        }
+        else if(this.cellType == 'constant' || this.cellType == 'control_dropdown'){
+            this.dom.valueFunctionLabel.style.display = '';
+            this.dom.valueFunctionWrapper.style.display = '';
+        }
+    }
+
+    saveEdit(){
+        let changed = {};
+
+        if(this.dom.input.valueFunction.value != this.valueFunction) changed.valueFunction = this.dom.input.valueFunction.value;
+        if(this.dom.input.resetFunction.value != this.resetFunction) changed.resetFunction = this.dom.input.resetFunction.value;
+
+        super.saveEdit(changed);
+    }
+
+    cancelEdit(){
+        this.dom.input.valueFunction.value = this.valueFunction;
+        this.dom.input.resetFunction.value = this.resetFunction;
+        super.cancelEdit();
+    }
+
+    reloadDOMVisibility(){
+        this.dom.titleValue.style.display = '';
+
+        this.dom.valueFunctionLabel.style.display = 'none';
+        this.dom.valueFunctionWrapper.style.display = 'none';
+        this.dom.resetFunctionLabel.style.display = 'none';
+        this.dom.resetFunctionWrapper.style.display = 'none';
+
+        super.reloadDOMVisibility();
     }
 
     delete(){
@@ -2913,11 +3365,26 @@ class Category {
 
         this.dom.head = this.dom.root.appendChild(document.createNode('div', {className: 'category_head content_section'}));
         this.dom.icons = {};
-        this.dom.icons.draggable = this.dom.head.appendChild(document.createNode('img', {className: 'icon draggable_icon drag_handle_category', src:'icons/draggable.svg', onmousedown: ()=>{
-            this.toggleOpen(false);
-        }}));
-        this.dom.icons.edit = this.dom.head.appendChild(document.createNode('img', {className: 'icon edit_icon', src:'icons/pencil-2.png', onclick: ()=>this.edit()}));
-        this.dom.icons.delete = this.dom.head.appendChild(document.createNode('img', {className: 'icon delete_icon', src:'icons/bin-2.png', onclick: ()=>this.delete()}, {display:'none'}));
+
+        this.dom.icons.draggable = this.dom.head.appendChild(document.createNode('div', {
+            className: 'draggable_icon drag_handle_category', 
+            onmousedown:()=>{
+                this.toggleOpen(false);
+            }
+        }));
+        this.dom.icons.draggable.appendChild(document.createNode('img', {className: 'icon', src:'icons/draggable.svg'}));
+
+        this.dom.icons.edit = this.dom.head.appendChild(document.createNode('div', {
+            className: 'edit_icon', 
+            onclick: ()=>this.edit()
+        }));
+        this.dom.icons.edit.appendChild(document.createNode('img', {className: 'icon', src:'icons/pencil-2.png'}));
+
+        this.dom.icons.delete = this.dom.head.appendChild(document.createNode('div', {
+            className: 'delete_icon', 
+            onclick: ()=>this.delete()
+        }, {display:'none'}));
+        this.dom.icons.delete.appendChild(document.createNode('img', {className: 'icon', src:'icons/bin-2.png'}));
 
         this.dom.head.appendChild(document.createNode('div',{innerHTML:'+', className:'add_element add_element_category', onclick: e=>{
             let fields = [];
@@ -3569,7 +4036,8 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
         if(exitEditBehaviour != 'stay' && currentlyEditing) currentlyEditing[exitEditBehaviour]();
     }
 
-    if(!currentStoryline) currentStoryline = await (new Storyline(0)).init(); // TODO: change default storyline (and check localstorage)
+    await loadPromises.storylines.loaded;
+    if(!currentStoryline) currentStoryline = await (new Storyline(parseInt(localStorage.getItem('pnp_storyline')))).init();
     currentStoryline.openTab();
 
     document.getElementById('menu_storyline').onclick = () => currentStoryline.openTab();
@@ -3585,15 +4053,30 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
 })();
 
 /* TODO/NOTES:
-- value system & cells display system
+- value system:
+    - adding cells
+    - handling br/hr entries (both empty divs with border or no border)
+    - compact mode on/off (toggling icon in filter bar)
+    - layout edit mode:
+        - started with icon in filter bar
+        - new line icon after every element -> adds new br
+        - every br gets dashed border and some padding (enables clicking) -> turns into hr
+        - hr on click removes it
+    - control_dropdown (edit mode -> relabel value function and use for entries)
+    - edit DOM element for offsetAbsolute
 - transfering items
-- settings
+- settings: 
+    - see local TODO
+    - storyline
+- dice
 - music
+- board
 - map system
 
 
 ISSUES:
 - creating new player from template -> not copying effect mappings correctly
+- Push notifications (old tokens etc.) -> use unique device id and check every at start up
 
 PLANS:
 
