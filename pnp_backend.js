@@ -58,14 +58,33 @@ mysql.query = async function(query){
     }
 };
 
-mysql.connection = mysql.createConnection(config.mysql);
-mysql.connection.connect(function(err){
-    if(err) console.error('Error while connecting to MySQL: ',err);
-    else{
-        mysql.connectionReady = true;
-        for(let resolve of mysql.connectResolves) resolve();
-    }
-});
+mysql.safeConnect = function(connectionConfig) {
+    this.connection = this.createConnection(connectionConfig);
+
+    this.connection.connect((err)=>{
+        if(err){
+            console.error('Error while connecting to MySQL: ',err);
+            setTimeout(()=>this.safeConnect(connectionConfig), 2000);
+        } 
+        else{
+            this.connectionReady = true;
+            for(let resolve of this.connectResolves) resolve();
+        }
+    });
+
+    this.connection.on('error', function(err) {
+        this.connectionReady = false;
+        if(err.code === 'PROTOCOL_CONNECTION_LOST') {
+            console.log('Lost MySQL connection, reconnecting...');
+            this.safeConnect(connectionConfig);
+        } else {
+            throw err;
+        }
+    });
+}
+  
+mysql.safeConnect(config.mysql);
+
 
 const _ = undefined;
 
@@ -1682,7 +1701,10 @@ io.on('connection', async (socket) => {
                             tmpData.valueFunction = String(template.valueFunction);
                         else if(data.valueFunction != undefined) tmpData.valueFunction = String(data.valueFunction);
 
-                        if(!tmpData.valueFunction) tmpData.valueFunction = '0';
+                        if(!tmpData.valueFunction){
+                            if(tmpData.cellType == 'control_dropdown') tmpData.valueFunction = 'Option 0\nOption 1\nOption 2';
+                            else tmpData.valueFunction = '0';
+                        }
                     }
 
                     if(tmpData.cellType == 'dynamic'){

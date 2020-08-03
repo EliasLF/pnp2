@@ -80,10 +80,15 @@ String.prototype.startsWithCount = function(str){
 	}
 	return c;
 };
+String.prototype.splitOptional = function (string) {
+    if(!this) return [];
+    return this.split(string);
+}
 Object.defineProperty(String.prototype, "encodeHTML", {enumerable: false});
 Object.defineProperty(String.prototype, "decodeHTML", {enumerable: false});
 Object.defineProperty(String.prototype, "undefinedIndexOf", {enumerable: false});
 Object.defineProperty(String.prototype, "startsWithCount", {enumerable: false});
+Object.defineProperty(String.prototype, "splitOptional", {enumerable: false});
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -405,12 +410,16 @@ if("serviceWorker" in navigator){
 var discordUser;
 function onDiscordUserLoaded(){
     socket.on('updateDiscordUser_'+discordUser._id, newUser => {
-        if(newUser) discordUser = newUser;
+        if(!newUser) return;
+        discordUser = newUser;
+        settings.updateDiscordUser();
     });
 
     if(localStorage.getItem('pnp_push_token') && !discordUser.notifications.web.map(x => x.token).includes(localStorage.getItem('pnp_push_token')))
         localStorage.getItem('pnp_push','0');
     if(parseInt(localStorage.getItem('pnp_push'))) notifications.subscribe();
+
+    settings.updateDiscordUser();
 }
 
 function initDiscord(){
@@ -515,16 +524,56 @@ var loadingResolves = {
     BoardEnvironment: new Map(),
     BoardEntity: new Map()
 };
+var openPrimaryTab = 'storyline';
+
+var hiddenPlayers = localStorage.getItem('pnp_hidden_players')?.splitOptional(',').map(x => parseInt(x));
+if(!hiddenPlayers){
+    localStorage.setItem('pnp_hidden_players','');
+    hiddenPlayers = [];
+}
+hiddenPlayers = new Set(hiddenPlayers);
+
+var DOMCache = {};
+function prepareDOMCache(){
+    DOMCache.menus = {};
+    DOMCache.menus.primary = document.getElementById('primary_menu');
+    DOMCache.menus.secondary = document.getElementById('secondary_menu');
+    DOMCache.menus.tertiary = document.getElementById('tertiary_menu');
+
+    DOMCache.menuEntries = {};
+    DOMCache.menuEntries.storyline = document.getElementById('menu_storyline');
+    DOMCache.menuEntries.players = document.getElementById('menu_players');
+    DOMCache.menuEntries.board = document.getElementById('menu_board');
+    DOMCache.menuEntries.music = document.getElementById('menu_music');
+    DOMCache.menuEntries.settings = document.getElementById('menu_settings');
+
+    DOMCache.main = document.getElementById('main');
+    DOMCache.mainContent = document.getElementById('main_content');
+
+    DOMCache.overlays = {};
+    DOMCache.overlays.edit = document.getElementById('edit_overlay');
+    DOMCache.overlays.loading = document.getElementById('loading_overlay');
+    DOMCache.overlays.popup = document.getElementById('popup_overlay');
+
+    DOMCache.popup = document.getElementById('popup');
+
+    DOMCache.addMenu = document.getElementById('add_menu');
+}
 
 var storylineSelectionWrapper = document.createNode('div',{className:'content_section category_head'});
 storylineSelectionWrapper.appendChild(document.createNode('h2',{innerHTML:'Switch storyline: '}));
 var storylineSelection = storylineSelectionWrapper.appendChild(document.createNode('select',{onchange: async function(){
     if(this.value == currentStoryline.id) return;
-    if(!objectSets.Storyline.get(parseInt(this.value))) await (new Storyline(parseInt(this.value))).init();
+    if(!objectSets.Storyline.get(parseInt(this.value))){
+        DOMCache.overlays.loading.style.display = '';
+        await (new Storyline(parseInt(this.value))).init();
+        DOMCache.overlays.loading.style.display = 'none';
+    }
     currentStoryline = objectSets.Storyline.get(parseInt(this.value));
     $ = {};
     for(let x of currentStoryline.getPlayerEntities()) $[x.referenceName] = x;
-    document.getElementById('menu_storyline').onclick();
+    settings.initStoryline(currentStoryline);
+    if(openPrimaryTab == 'storyline') currentStoryline.openTab();
 }},{marginTop:'10px'}));
 var storylineSelectionOptions = new Map();
 
@@ -533,7 +582,6 @@ socket.on('serveData_storylineNames', names => {
     for(let [id, name] of names){
         storylineSelectionOptions.set(id, storylineSelection.appendChild(document.createNode('option',{value:id, innerHTML:name})));
     }
-    if(!localStorage.getItem('pnp_storyline')) localStorage.setItem('pnp_storyline',names[0][0]);
     loadPromises.storylines.resolve();
 });
 
@@ -603,12 +651,12 @@ const popup = {
         delete this.onclose;
         this.popup.style.display = '';
         this.overlay.style.display = '';
-        document.getElementById('main').classList.remove('blurred');
+        DOMCache.main.classList.remove('blurred');
     }, 
 
     open(elems, onclose){
         this.overlay.style.display = 'initial';
-        document.getElementById('main').classList.add('blurred');
+        DOMCache.main.classList.add('blurred');
         this.popup.innerHTML = '';
         for(let x of elems) this.popup.appendChild(x);
         this.popup.style.display = 'initial';
@@ -618,13 +666,355 @@ const popup = {
 
 var settings = {
     menuTabs: {
-        general: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'General',onclick: ()=>Storyline.openSettingsTab('general')}),
-        storyline: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Storyline',onclick: ()=>Storyline.openSettingsTab('storyline')}),
-        notifications: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Notifications',onclick: ()=>Storyline.openSettingsTab('notifications')})
-    }
+        general: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'General',onclick: ()=>settings.openTab('general')}),
+        storyline: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Storyline',onclick: ()=>settings.openTab('storyline')}),
+        notifications: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Notifications',onclick: ()=>settings.openTab('notifications')})
+    },
 
-    // TODO: move openSettingsTab here; replace dynamic loading system by static nodes, which are updated
+    dom: {},
+
+    currentOpenTab: 'general',
+
+    async updateDiscordUser(){
+        if(!discordUser) return;
+        await this.loaded;
+
+        if(discordUser.notifications.web.some(x => x.token != notifications.token)){
+            this.dom.notifications.push.otherDevices.innerHTML = '';
+            for(let x of discordUser.notifications.web){
+                if(x.token == notifications.token) continue;
+                let pushDevice = this.dom.notifications.push.otherDevices.appendChild(document.createNode('li',{
+                    innerHTML: x.device.os.name + ' ' + x.device.os.version + ', ' + x.device.browser.name + ' ' + x.device.browser.version
+                }));
+                pushDevice.appendChild(document.createNode('img',{
+                    src:'icons/bin-2.png',
+                    className:'icon remove_element_icon',
+                    onclick: ()=>{
+                        pushDevice.removeFromParent();
+                        notifications.unsubscribe(x.token);
+                    }
+                }));
+            }
+            this.dom.notifications.push.otherDevicesWrapper.style.display = '';
+        }
+        else this.dom.notifications.push.otherDevicesWrapper.style.display = 'none';
+
+        if(!this.getEmails().equals(discordUser.notifications.email)){
+            this.dom.notifications.email.inputs.innerHTML = '';
+            this.emailInputs = [];
+            for(let email of discordUser.notifications.email) this.addEmailInput(email);
+        }
+
+        this.dom.notifications.discord.checkbox.checked = discordUser.notifications.discord;
+    },
+
+    initStoryline(storyline){
+        this.dom.storyline.playerVisibility.innerHTML = '';
+        for(let x of storyline.getPlayerEntities()){
+            this.dom.storyline.playerVisibility.appendChild(x.dom.visibilitySetting.nameWrapper);
+            this.dom.storyline.playerVisibility.appendChild(x.dom.visibilitySetting.iconWrapper);
+        }
+    },
+
+    init(){
+        // GENERAL:
+        {
+            this.dom.general = document.createNode('div',{className: 'content_section settings_section'});
+            this.dom.general.appendChild(document.createNode('h2',{innerHTML:'General Settings'}));
+            let grid = this.dom.general.appendChild(document.createNode('div',{className:'settings_grid'}));
+
+
+            grid.appendChild(document.createNode('div',{innerHTML:'Theme:&nbsp;'}));
+            let themeSelect = grid.appendChild(document.createNode('div'))
+            .appendChild(document.createNode('select',{onchange: function(){
+                localStorage.setItem('pnp_theme',this.value);
+                document.body.className = this.value;
+            }}));
+            themeSelect.appendChild(document.createNode('option',{innerHTML:'Dark',value:'dark'}));
+            themeSelect.appendChild(document.createNode('option',{innerHTML:'Light',value:'light'}));
+
+            if(!localStorage.getItem('pnp_theme')) localStorage.setItem('pnp_theme','dark');
+            themeSelect.value = localStorage.getItem('pnp_theme');
+
+
+            grid.appendChild(document.createNode('div',{innerHTML:'Position of new elements:&nbsp;'}));
+            let positionSelect = grid.appendChild(document.createNode('div'))
+            .appendChild(document.createNode('select',{onchange: function(){
+                localStorage.setItem('pnp_new_element_position',this.value);
+            }}));
+            positionSelect.appendChild(document.createNode('option',{innerHTML:'Top',value:'top'}));
+            positionSelect.appendChild(document.createNode('option',{innerHTML:'Bottom',value:'bottom'}));
+
+            if(!localStorage.getItem('pnp_new_element_position')) localStorage.setItem('pnp_new_element_position','bottom');
+            positionSelect.value = localStorage.getItem('pnp_new_element_position');
+
+
+            if(!localStorage.getItem('pnp_pauls_mode')) localStorage.setItem('pnp_pauls_mode','1');
+            grid.appendChild(document.createNode('div',{innerHTML:'Adding elements to categories directly (Paul\'s mode):&nbsp;'}));
+            grid.appendChild(document.createNode('div',{}))
+            .appendChild(document.createNode('input',{
+                type: 'checkbox',
+                checked: parseInt(localStorage.getItem('pnp_pauls_mode')),
+                onchange: function(){
+                    localStorage.setItem('pnp_pauls_mode',this.checked * 1);
+                    styleRules.addElementCategory.style.display = this.checked ? '' : 'none';
+                }
+            }));
+
+
+            grid.appendChild(document.createNode('div',{innerHTML:'Clicking outside while in edit mode:&nbsp;'}));
+            let exitEditSelect = grid.appendChild(document.createNode('div'))
+            .appendChild(document.createNode('select',{onchange: function(){
+                localStorage.setItem('pnp_exit_edit',this.value);
+                exitEditBehaviour = this.value;
+            }}));
+            exitEditSelect.appendChild(document.createNode('option',{innerHTML:'stay in edit mode',value:'stay'}));
+            exitEditSelect.appendChild(document.createNode('option',{innerHTML:'exit and discard changes',value:'cancelEdit'}));
+            exitEditSelect.appendChild(document.createNode('option',{innerHTML:'exit and save changes',value:'saveEdit'}));
+
+            if(!localStorage.getItem('pnp_exit_edit')) localStorage.setItem('pnp_exit_edit','saveEdit');
+            exitEditSelect.value = localStorage.getItem('pnp_exit_edit');
+
+
+            if(!localStorage.getItem('pnp_category_indent')) localStorage.setItem('pnp_category_indent',15);
+            grid.appendChild(document.createNode('div',{innerHTML:'Category indentation:&nbsp;'}));
+            let categoryIndent = grid.appendChild(document.createNode('div'));
+            categoryIndent.appendChild(document.createNode('input',{
+                type: 'number',
+                min: 0,
+                step: 1,
+                value: localStorage.getItem('pnp_category_indent'),
+                onchange: function(){
+                    if(parseInt(this.value) >= 0){
+                        localStorage.setItem('pnp_category_indent',this.value);
+                        styleRules.categoryBody.style.marginLeft = this.value + 'px';
+                    }
+                }
+            }));
+            categoryIndent.appendChild(document.createTextNode(' pixel'));
+        }
+
+        // NOTIFICATIONS:
+        {
+            this.dom.notifications = {};
+
+            this.dom.notifications.unavailable = document.createNode('div',{
+                className: 'content_section settings_section',
+                innerHTML: 
+`This device is not yet associated with a discord user. To initialize this device follow these steps:
+<ol>
+<li>open Discord and navigate to the P&P server</li>
+<li>once on the server navigate to the text channel named <code>bot</code></li>
+<li>inside this channel type the message <code>?init</code> and send it</li>
+<li>shortly after the discord bot should reply with your initialization link</li>
+<li>open that link on this device</li>
+<li>you are all done</li>
+</ol>
+(If this message does not dissappear after you followed the above steps, it is most likely not your fault. Just hit me up and I will fix it)`
+            });
+
+
+            this.dom.notifications.main = document.createNode('div',{className: 'content_section settings_section'});
+            this.dom.notifications.main.appendChild(document.createNode('h2',{innerHTML:'Notification Settings'}));
+            this.dom.notifications.main.appendChild(document.createNode('div',{
+                innerHTML:
+`Here you can set additional ways of being notified about important announcements regarding game sessions (dates, etc.) besides the usual @everyone ping on the discord server.<br><br>
+You only get notifications for storylines you have declared to be part of by assigning yourself the respective role on the discord server.
+(e.g. you only get notifications for the storyline Ura Cycle 1, if you have assigned yourself the role <code>ura-cycle-1</code> on discord; the voyeur role has no effect on notifications)<br>
+You can manage your roles via the bot command <code>?role add/remove role_name</code> in the bot channel. A list of all roles is available via the command 
+<code>?roles</code>. Your current roles are inspectible by clicking on your discord name or avatar anywhere on the server (on the right side in the user list or above any of your messages)`
+            }));
+
+            this.dom.notifications.push = {};
+            this.dom.notifications.push.root = document.createNode('div',{className: 'content_section settings_section'});
+            this.dom.notifications.push.root.appendChild(document.createNode('h3',{innerHTML:'Push notifications'}));
+            let pushInfoSection = this.dom.notifications.push.root.appendChild(document.createNode('div',{
+                innerHTML:
+`Push notifications are messages from apps that appear somewhere on the main screen even if the app is closed. 
+This method <b><i>only reliably works on mobile devices</i></b> and after installing this website as a PWA 
+(which essentially just means creating a link to it on your homescreen taking two clicks (browser menu &#8594; 'add to home screen' or something similar depending on your browser))<br>
+If you are sceptical or want to know more:<br>`
+            },{marginBottom:'30px'}));
+            pushInfoSection.appendChild(document.createNode('a',{
+                innerHTML: 'What is a PWA?',
+                onclick: ()=>{
+                    // TODO: open popup with explanation
+                }
+            }));
+            pushInfoSection.appendChild(document.createNode('br'));
+            pushInfoSection.appendChild(document.createNode('a',{
+                innerHTML: 'How to install a PWA on my specific device?',
+                onclick: ()=>{
+                    // TODO: open popup with explanation
+                }
+            }));
+
+            if(!localStorage.getItem('pnp_push')) localStorage.setItem('pnp_push','0');
+            this.dom.notifications.push.main = this.dom.notifications.push.root.appendChild(document.createNode('div'));
+            
+            this.dom.notifications.push.checkbox = document.createNode('input',{
+                type: 'checkbox',
+                checked: parseInt(localStorage.getItem('pnp_push')),
+                onchange: async ()=>{
+                    localStorage.setItem('pnp_push',this.dom.notifications.push.checkbox.checked * 1);
+                    if(this.dom.notifications.push.checkbox.checked){
+                        if(!(await notifications.subscribe())){
+                            this.dom.notifications.push.checkbox.checked = false;
+                            this.dom.notifications.push.error.innerHTML = 'Notifications were blocked by your browser. Please look into your browser settings.';
+                            localStorage.setItem('pnp_push',0);
+                        }
+                        else this.dom.notifications.push.error.innerHTML = device.isPhone ? '' : 'Your device is not a mobile phone. This will probably not work reliably.';
+                    }
+                    else notifications.unsubscribe();
+                }
+            });
+            this.dom.notifications.push.error = document.createNode('span',_,{color:'red',marginLeft:'5px'});
+            
+            this.dom.notifications.push.unavailable = document.createNode('span',{innerHTML:'Not available on this device'});
+            
+            this.dom.notifications.push.otherDevicesWrapper = this.dom.notifications.push.root.appendChild(document.createNode('div',
+                {innerHTML:'Other devices:'},
+                {marginTop: '10px', display: 'none'}
+            ));
+            this.dom.notifications.push.otherDevices = this.dom.notifications.push.root.appendChild(document.createNode('ul'));
+
+
+            this.dom.notifications.email = {};
+            this.dom.notifications.email.root = document.createNode('div',{className: 'content_section settings_section'});
+            this.dom.notifications.email.root.appendChild(document.createNode('h3',{innerHTML:'E-Mail'}));
+            this.dom.notifications.email.inputs = this.dom.notifications.email.root.appendChild(document.createNode('div'));
+            this.emailInputs = [];
+
+            this.dom.notifications.email.root.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
+            .appendChild(document.createNode('div',{
+                innerHTML:'+', 
+                className:'add_element', 
+                onclick: ()=>this.addEmailInput()
+            }));
+            
+
+            /*let telegram = DOMCache.mainContent.appendChild(document.createNode('div',{className: 'content_section settings_section'}));
+            telegram.appendChild(document.createNode('h3',{innerHTML:'Telegram'}));*/
+
+            this.dom.notifications.discord = {};
+            this.dom.notifications.discord.root = document.createNode('div',{className: 'content_section settings_section'});
+            this.dom.notifications.discord.root.appendChild(document.createNode('h3',{innerHTML:'Discord'}));
+            this.dom.notifications.discord.checkbox = this.dom.notifications.discord.root.appendChild(document.createNode('div',{innerHTML: 'Get private message on discord: '}))
+            .appendChild(document.createNode('input',{
+                type: 'checkbox',
+                onchange: async function(){
+                    socket.emit('notifications_setDiscordPM',discordUser._id, this.checked);
+                }
+            }));
+        }
+
+        // STORYLINE:
+        {
+            this.dom.storyline = {};
+            this.dom.storyline.root = document.createNode('div',{className: 'content_section settings_section'});
+            this.dom.storyline.root.appendChild(document.createNode('h2',{innerHTML:'Storyline Settings'}));
+            let grid = this.dom.storyline.root.appendChild(document.createNode('div',{className:'settings_grid'}));
+            grid.appendChild(document.createNode('div',{innerHTML:'Player visibility:&nbsp;'}));
+            this.dom.storyline.playerVisibility = grid.appendChild(document.createNode('div',{className:'settings_grid'}));
+
+            this.initStoryline(currentStoryline);
+        }
+
+        this.loadedResolve();
+    },
+
+    addEmailInput(email){
+        let emailElement = this.dom.notifications.email.inputs.appendChild(document.createNode('div'));
+        emailElement.appendChild(document.createNode('input',{
+            type: 'email',
+            placeholder: 'john.doe@example.com',
+            value: email ? email : '',
+            onchange: ()=>this.updateEmails()
+        }));
+        emailElement.appendChild(document.createNode('img',{
+            src:'icons/bin-2.png',
+            className:'icon remove_element_icon',
+            onclick: ()=>{
+                emailElement.removeFromParent();
+                this.emailInputs.splice(this.emailInputs.indexOf(emailElement),1);
+                this.updateEmails();
+            }
+        }));
+
+        this.emailInputs.push(emailElement);
+    },
+
+    updateEmails(){
+        if(!discordUser) return;
+        let emails = this.getEmails();
+        if(!emails.equals(discordUser.notifications.email)) socket.emit('notifications_setEmails',discordUser._id, emails);
+    },
+
+    getEmails(){
+        let emails = this.emailInputs.map(x => x.children[0].value);
+        for(let i=0;i<emails.length;i++){
+            if(!emails[i].includes('@')){
+                emails.splice(i,1);
+                i--;
+            }
+        }
+        return emails;
+    },
+
+    openTab(tab){
+        if(tab == undefined){
+            let activePrimaries = document.getElementsByClassName('primary_menu_active');
+            for(let x of activePrimaries) x.classList?.remove('primary_menu_active');
+            DOMCache.menuEntries.settings.classList?.add('primary_menu_active');
+
+            DOMCache.menus.secondary.innerHTML = '';
+            DOMCache.menus.secondary.appendChild(settings.menuTabs.general);
+            DOMCache.menus.secondary.appendChild(settings.menuTabs.storyline);
+            DOMCache.menus.secondary.appendChild(settings.menuTabs.notifications);
+            DOMCache.menus.secondary.style.display = '';
+
+            DOMCache.menus.tertiary.style.display = 'none';
+
+            return this.openTab(this.currentOpenTab);
+        }
+
+        this.currentOpenTab = tab;
+        let activeSecondaries = document.getElementsByClassName('secondary_menu_active');
+        for(let x of activeSecondaries) x.classList?.remove('secondary_menu_active');
+        settings.menuTabs[tab].classList?.add('secondary_menu_active');
+
+        DOMCache.mainContent.innerHTML = '';
+        if(tab == 'general'){
+            DOMCache.mainContent.appendChild(this.dom.general);
+        }
+
+        else if(tab == 'storyline'){
+            DOMCache.mainContent.appendChild(storylineSelectionWrapper);
+            storylineSelection.value = currentStoryline.id;
+
+            DOMCache.mainContent.appendChild(this.dom.storyline.root);
+        }
+
+        else if(tab == 'notifications'){
+            if(!discordUser){
+                DOMCache.mainContent.appendChild(this.dom.notifications.unavailable);
+            }
+            else{
+                DOMCache.mainContent.appendChild(this.dom.notifications.main);
+                DOMCache.mainContent.appendChild(this.dom.notifications.push.root);
+                DOMCache.mainContent.appendChild(this.dom.notifications.email.root);
+                DOMCache.mainContent.appendChild(this.dom.notifications.discord.root);
+                this.dom.notifications.push.main.innerHTML = 'Get push notifications on this device: ';
+                if(notifications.available){
+                    this.dom.notifications.push.main.appendChild(this.dom.notifications.push.checkbox);
+                    this.dom.notifications.push.main.appendChild(this.dom.notifications.push.error);
+                }
+                else this.dom.notifications.push.main.appendChild(this.dom.notifications.push.unavailable);
+            }
+        }
+    }
 };
+settings.loaded = new Promise(resolve => {settings.loadedResolve = resolve});
 
 class CircleDefinitionError extends Error{
     constructor(definitionStack, message){
@@ -678,7 +1068,7 @@ class Storyline {
             }
         });
 
-        this.dom.addButtons.generalInfo = document.createNode('div',{className:'add_element_wrapper'});
+        this.dom.addButtons.generalInfo = document.createNode('div',{className:'add_element_wrapper non_selectable'});
         this.dom.addButtons.generalInfo.appendChild(document.createNode('div',{innerHTML:'+', className:'add_element',
             onclick: e=>{
                 e.stopPropagation();
@@ -788,10 +1178,13 @@ class Storyline {
 
         this.updateDataCash = null;
 
-        if(this.gmPassword!=undefined){
-            if(data.gmPassword!=undefined) this.gmPassword = data.gmPassword;
+        if(this.gmPassword == undefined){
+            this.gmPassword = data.gmPassword ? data.gmPassword : '';
         }
-        else this.gmPassword = data.gmPassword ? data.gmPassword : '';
+
+        if(data.writingProtected!=undefined && this.writingProtected != data.writingProtected){
+            this.writingProtected = data.writingProtected;
+        }
 
         if(data.name!=undefined && this.name != data.name){
             this.name = data.name;
@@ -825,7 +1218,12 @@ class Storyline {
                 if(!objectSets.PlayerEntity.get(id)) newObjectInits.push((new PlayerEntity(id, this)).init());
             }
             this.dom.menuTabs.players.innerHTML = '';
-            for(let player of this.getPlayerEntities()) this.dom.menuTabs.players.appendChild(player.dom.menuTab);
+            let players = this.getPlayerEntities();
+            for(let player of players) this.dom.menuTabs.players.appendChild(player.dom.menuTab);
+            if(this.currentOpenPlayer && !players.includes(this.currentOpenPlayer)){
+                this.currentOpenPlayer = this.players.entities[0];
+                if(openPrimaryTab == 'players') this.openPlayer();
+            }
         }
         
         if(data.board?.environments && !this.board?.environments?.equals(data.board.environments)){
@@ -870,15 +1268,17 @@ class Storyline {
         if(tab == undefined){
             let activePrimaries = document.getElementsByClassName('primary_menu_active');
             for(let x of activePrimaries) x.classList?.remove('primary_menu_active');
-            document.getElementById('menu_storyline').classList?.add('primary_menu_active');
+            DOMCache.menuEntries.storyline.classList?.add('primary_menu_active');
 
-            document.getElementById('secondary_menu').innerHTML = '';
-            document.getElementById('secondary_menu').appendChild(this.dom.menuTabs.general);
-            document.getElementById('secondary_menu').appendChild(this.dom.menuTabs.storlineInfoTypes);
-            document.getElementById('secondary_menu').appendChild(this.dom.addButtons.storlineInfoTypes);
-            document.getElementById('secondary_menu').style.display = '';
+            DOMCache.menus.secondary.innerHTML = '';
+            DOMCache.menus.secondary.appendChild(this.dom.menuTabs.general);
+            DOMCache.menus.secondary.appendChild(this.dom.menuTabs.storlineInfoTypes);
+            DOMCache.menus.secondary.appendChild(this.dom.addButtons.storlineInfoTypes);
+            DOMCache.menus.secondary.style.display = '';
 
-            document.getElementById('tertiary_menu').style.display = 'none';
+            DOMCache.menus.tertiary.style.display = 'none';
+
+            localStorage.setItem('pnp_storyline',this.id);
 
             return this.openTab(this.currentOpenTab);
         }
@@ -890,11 +1290,11 @@ class Storyline {
             for(let x of activeSecondaries) x.classList?.remove('secondary_menu_active');
             this.dom.menuTabs.general.classList?.add('secondary_menu_active');
 
-            document.getElementById('main_content').innerHTML = '';
-            document.getElementById('main_content').appendChild(storylineSelectionWrapper);
+            DOMCache.mainContent.innerHTML = '';
+            DOMCache.mainContent.appendChild(storylineSelectionWrapper);
             storylineSelection.value = this.id;
-            document.getElementById('main_content').appendChild(this.dom.generalInfo);
-            document.getElementById('main_content').appendChild(this.dom.addButtons.generalInfo);
+            DOMCache.mainContent.appendChild(this.dom.generalInfo);
+            DOMCache.mainContent.appendChild(this.dom.addButtons.generalInfo);
         }
         else{
             if(!this.info.types.includes(tab)) return;
@@ -906,15 +1306,15 @@ class Storyline {
         if(player == undefined){
             let activePrimaries = document.getElementsByClassName('primary_menu_active');
             for(let x of activePrimaries) x.classList?.remove('primary_menu_active');
-            document.getElementById('menu_players').classList?.add('primary_menu_active');
+            DOMCache.menuEntries.players.classList?.add('primary_menu_active');
 
-            document.getElementById('secondary_menu').innerHTML = '';
-            document.getElementById('secondary_menu').appendChild(this.dom.menuTabs.players);
-            document.getElementById('secondary_menu').appendChild(this.dom.addButtons.players);
-            document.getElementById('secondary_menu').style.display = '';
-            document.getElementById('tertiary_menu').style.display = 'none';
+            DOMCache.menus.secondary.innerHTML = '';
+            DOMCache.menus.secondary.appendChild(this.dom.menuTabs.players);
+            DOMCache.menus.secondary.appendChild(this.dom.addButtons.players);
+            DOMCache.menus.secondary.style.display = '';
+            DOMCache.menus.tertiary.style.display = 'none';
 
-            document.getElementById('main_content').innerHTML = '';
+            DOMCache.mainContent.innerHTML = '';
             if(this.currentOpenPlayer == undefined) return;
             return this.openPlayer(this.currentOpenPlayer);
         }
@@ -1040,268 +1440,6 @@ class Storyline {
         
         popup.open([wrapper]);
     }
-
-    static openSettingsTab(tab){
-        if(tab == undefined){
-            let activePrimaries = document.getElementsByClassName('primary_menu_active');
-            for(let x of activePrimaries) x.classList?.remove('primary_menu_active');
-            document.getElementById('menu_settings').classList?.add('primary_menu_active');
-
-            document.getElementById('secondary_menu').innerHTML = '';
-            document.getElementById('secondary_menu').appendChild(settings.menuTabs.general);
-            document.getElementById('secondary_menu').appendChild(settings.menuTabs.storyline);
-            document.getElementById('secondary_menu').appendChild(settings.menuTabs.notifications);
-            document.getElementById('secondary_menu').style.display = '';
-
-            document.getElementById('tertiary_menu').style.display = 'none';
-        }
-
-        let activeSecondaries = document.getElementsByClassName('secondary_menu_active');
-        for(let x of activeSecondaries) x.classList?.remove('secondary_menu_active');
-        settings.menuTabs[tab ?? 'general'].classList?.add('secondary_menu_active');
-
-        let mainContent = document.getElementById('main_content');
-        mainContent.innerHTML = '';
-        if(tab == 'general' || tab == undefined){
-            let root = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
-            root.appendChild(document.createNode('h2',{innerHTML:'General Settings'}));
-            let grid = root.appendChild(document.createNode('div',{className:'settings_grid'}));
-
-            grid.appendChild(document.createNode('div',{innerHTML:'Theme:&nbsp;'}));
-            let themeSelect = grid.appendChild(document.createNode('div'))
-            .appendChild(document.createNode('select',{onchange: function(){
-                localStorage.setItem('pnp_theme',this.value);
-                document.body.className = this.value;
-            }}));
-            themeSelect.appendChild(document.createNode('option',{innerHTML:'Dark',value:'dark'}));
-            themeSelect.appendChild(document.createNode('option',{innerHTML:'Light',value:'light'}));
-
-            if(!localStorage.getItem('pnp_theme')) localStorage.setItem('pnp_theme','dark');
-            themeSelect.value = localStorage.getItem('pnp_theme');
-
-            grid.appendChild(document.createNode('div',{innerHTML:'Position of new elements:&nbsp;'}));
-            let positionSelect = grid.appendChild(document.createNode('div'))
-            .appendChild(document.createNode('select',{onchange: function(){
-                localStorage.setItem('pnp_new_element_position',this.value);
-            }}));
-            positionSelect.appendChild(document.createNode('option',{innerHTML:'Top',value:'top'}));
-            positionSelect.appendChild(document.createNode('option',{innerHTML:'Bottom',value:'bottom'}));
-
-            if(!localStorage.getItem('pnp_new_element_position')) localStorage.setItem('pnp_new_element_position','bottom');
-            positionSelect.value = localStorage.getItem('pnp_new_element_position');
-
-            if(!localStorage.getItem('pnp_pauls_mode')) localStorage.setItem('pnp_pauls_mode','1');
-            grid.appendChild(document.createNode('div',{innerHTML:'Adding elements to categories directly (Paul\'s mode):&nbsp;'}));
-            grid.appendChild(document.createNode('div',{}))
-            .appendChild(document.createNode('input',{
-                type: 'checkbox',
-                checked: parseInt(localStorage.getItem('pnp_pauls_mode')),
-                onchange: function(){
-                    localStorage.setItem('pnp_pauls_mode',this.checked * 1);
-                    styleRules.addElementCategory.style.display = this.checked ? '' : 'none';
-                }
-            }));
-
-
-            grid.appendChild(document.createNode('div',{innerHTML:'Clicking outside while in edit mode:&nbsp;'}));
-            let exitEditSelect = grid.appendChild(document.createNode('div'))
-            .appendChild(document.createNode('select',{onchange: function(){
-                localStorage.setItem('pnp_exit_edit',this.value);
-                exitEditBehaviour = this.value;
-            }}));
-            exitEditSelect.appendChild(document.createNode('option',{innerHTML:'stay in edit mode',value:'stay'}));
-            exitEditSelect.appendChild(document.createNode('option',{innerHTML:'exit and discard changes',value:'cancelEdit'}));
-            exitEditSelect.appendChild(document.createNode('option',{innerHTML:'exit and save changes',value:'saveEdit'}));
-
-            if(!localStorage.getItem('pnp_exit_edit')) localStorage.setItem('pnp_exit_edit','saveEdit');
-            exitEditSelect.value = localStorage.getItem('pnp_exit_edit');
-
-
-            if(!localStorage.getItem('pnp_category_indent')) localStorage.setItem('pnp_category_indent',15);
-            grid.appendChild(document.createNode('div',{innerHTML:'Category indentation:&nbsp;'}));
-            let categoryIndent = grid.appendChild(document.createNode('div'));
-            categoryIndent.appendChild(document.createNode('input',{
-                type: 'number',
-                min: 0,
-                step: 1,
-                value: localStorage.getItem('pnp_category_indent'),
-                onchange: function(){
-                    if(parseInt(this.value) >= 0){
-                        localStorage.setItem('pnp_category_indent',this.value);
-                        styleRules.categoryBody.style.marginLeft = this.value + 'px';
-                    }
-                }
-            }));
-            categoryIndent.appendChild(document.createTextNode(' pixel'));
-        }
-
-        else if(tab == 'storyline'){
-            mainContent.appendChild(storylineSelectionWrapper);
-            storylineSelection.value = currentStoryline.id;
-            // TODO: update settings when storyline switched (prob best just reopen settings)
-
-            let root = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
-            root.appendChild(document.createNode('h2',{innerHTML:'Storyline Settings'}));
-            let grid = root.appendChild(document.createNode('div',{className:'settings_grid'}));
-        }
-
-        else if(tab == 'notifications'){
-            if(!discordUser){
-                mainContent.appendChild(document.createNode('div',{
-                    className: 'content_section',
-                    innerHTML: 
-`This device is not yet associated with a discord user. To initialize this device follow these steps:
-<ol>
-<li>open Discord and navigate to the P&P server</li>
-<li>once on the server navigate to the text channel named <code>bot</code></li>
-<li>inside this channel type the message <code>?init</code> and send it</li>
-<li>shortly after the discord bot should reply with your initialization link</li>
-<li>open that link on this device</li>
-<li>you are all done</li>
-</ol>
-(If this message does not dissappear after you followed the above steps, it is most likely not your fault. Just hit me up and I will fix it)`
-                }));
-            }
-            else{
-                let root = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
-                root.appendChild(document.createNode('h2',{innerHTML:'Notification Settings'},{marginBottom: '5px'}));
-                root.appendChild(document.createNode('div',{
-                    innerHTML:
-`Here you can set additional ways of being notified about important announcements regarding game sessions (dates, etc.) besides the usual @everyone ping on the discord server.<br><br>
-You only get notifications for storylines you have declared to be part of by assigning yourself the respective role on the discord server.
-(e.g. you only get notifications for the storyline Ura Cycle 1, if you have assigned yourself the role <code>ura-cycle-1</code> on discord; the voyeur role has no effect on notifications)<br>
-You can manage your roles via the bot command <code>?role add/remove role_name</code> in the bot channel. A list of all roles is available via the command 
-<code>?roles</code>. Your current roles are inspectible by clicking on your discord name or avatar anywhere on the server (on the right side in the user list or above any of your messages)`
-                }));
-
-                let pushSection = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
-                pushSection.appendChild(document.createNode('h3',{innerHTML:'Push notifications'},{marginBottom: '10px'}));
-                let pushInfoSection = pushSection.appendChild(document.createNode('div',{
-                    innerHTML:
-`Push notifications are messages from apps that appear somewhere on the main screen even if the app is closed. 
-This method <b><i>only reliably works on mobile devices</i></b> and after installing this website as a PWA 
-(which essentially just means creating a link to it on your homescreen taking two clicks (browser menu &#8594; 'add to home screen' or something similar depending on your browser))<br>
-If you are sceptical or want to know more:<br>`
-                },{marginBottom:'30px'}));
-                pushInfoSection.appendChild(document.createNode('a',{
-                    innerHTML: 'What is a PWA?',
-                    onclick: ()=>{
-                        // TODO: open popup with explanation
-                    }
-                }));
-                pushInfoSection.appendChild(document.createNode('br'));
-                pushInfoSection.appendChild(document.createNode('a',{
-                    innerHTML: 'How to install a PWA on my specific device?',
-                    onclick: ()=>{
-                        // TODO: open popup with explanation
-                    }
-                }));
-
-                if(!localStorage.getItem('pnp_push')) localStorage.setItem('pnp_push','0');
-                let usePush = pushSection.appendChild(document.createNode('div',{innerHTML: 'Use push notifications on this device: '}));
-                if(notifications.available){
-                    usePush.appendChild(document.createNode('input',{
-                        type: 'checkbox',
-                        checked: parseInt(localStorage.getItem('pnp_push')),
-                        onchange: async function(){
-                            localStorage.setItem('pnp_push',this.checked * 1);
-                            if(this.checked){
-                                if(!(await notifications.subscribe())){
-                                    this.checked = false;
-                                    usePushError.innerHTML = 'Notifications were blocked by your browser. Please look into your browser settings.';
-                                    localStorage.setItem('pnp_push',0);
-                                }
-                                else usePushError.innerHTML = device.isPhone ? '' : 'Your device is not a mobile phone. This will probably not work reliably.';
-                            }
-                            else notifications.unsubscribe();
-                        }
-                    }));
-                    var usePushError = usePush.appendChild(document.createNode('span',_,{color:'red',marginLeft:'5px'}));
-                }
-                else{
-                    usePush.appendChild(document.createNode('span',{innerHTML:'Not available on this device'}));
-                }
-                if(discordUser.notifications.web.some(x => x.token != notifications.token)){
-                    pushSection.appendChild(document.createNode('div',{innerHTML:'Other devices:'},{marginTop: '10px'}));
-                    let pushOtherDevices = pushSection.appendChild(document.createNode('ul'));
-                    for(let x of discordUser.notifications.web){
-                        if(x.token == notifications.token) continue;
-                        let pushDevice = pushOtherDevices.appendChild(document.createNode('li',{
-                            innerHTML: x.device.os.name + ' ' + x.device.os.version + ', ' + x.device.browser.name + ' ' + x.device.browser.version
-                        }));
-                        pushDevice.appendChild(document.createNode('img',{
-                            src:'icons/bin-2.png',
-                            className:'icon remove_element_icon',
-                            onclick: ()=>{
-                                pushDevice.removeFromParent();
-                                notifications.unsubscribe(x.token);
-                            }
-                        }));
-                    }
-                }
-
-                function updateEmails(){
-                    let emails = emailInputs.map(x => x.children[0].value);
-                    for(let i=0;i<emails.length;i++){
-                        if(!emails[i].includes('@')){
-                            emails.splice(i,1);
-                            i--;
-                        }
-                    }
-                    if(!emails.equals(discordUser.notifications.email)) socket.emit('notifications_setEmails',discordUser._id, emails);
-                }
-
-                let emailSection = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
-                emailSection.appendChild(document.createNode('h3',{innerHTML:'E-Mail'},{marginBottom: '10px'}));
-                let emailInputSection = emailSection.appendChild(document.createNode('div'));
-                var emailInputs = [];
-                function addEmailInput(email){
-                    let emailElement = emailInputSection.appendChild(document.createNode('div'));
-                    emailElement.appendChild(document.createNode('input',{
-                        type: 'email',
-                        placeholder: 'john.doe@example.com',
-                        value: email ? email : '',
-                        onchange: ()=>updateEmails()
-                    }));
-                    emailElement.appendChild(document.createNode('img',{
-                        src:'icons/bin-2.png',
-                        className:'icon remove_element_icon',
-                        onclick: ()=>{
-                            emailElement.removeFromParent();
-                            emailInputs.splice(emailInputs.indexOf(emailElement),1);
-                            updateEmails();
-                        }
-                    }));
-
-                    emailInputs.push(emailElement);
-                }
-
-                for(let x of discordUser.notifications.email) addEmailInput(x);
-
-                emailSection.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
-                .appendChild(document.createNode('div',{
-                    innerHTML:'+', 
-                    className:'add_element', 
-                    onclick: ()=>addEmailInput()
-                }));
-                
-
-                /*let telegram = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
-                telegram.appendChild(document.createNode('h3',{innerHTML:'Telegram'}));*/
-
-                let discordSection = mainContent.appendChild(document.createNode('div',{className: 'content_section'}));
-                discordSection.appendChild(document.createNode('h3',{innerHTML:'Discord'},{marginBottom: '10px'}));
-                discordSection.appendChild(document.createNode('div',{innerHTML: 'Get private message on discord: '}))
-                .appendChild(document.createNode('input',{
-                    type: 'checkbox',
-                    checked: discordUser.notifications.discord,
-                    onchange: async function(){
-                        socket.emit('notifications_setDiscordPM',discordUser._id, this.checked);
-                    }
-                }));
-            }
-        }
-    }
 }
 
 class Entity { // abstract
@@ -1372,7 +1510,7 @@ class Entity { // abstract
         this.dom.imageEdit = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
         this.dom.imageEditSection = this.dom.imageEdit.appendChild(document.createNode('div'));
         let $this = this;
-        this.dom.imageEdit.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        this.dom.imageEdit.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
         .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: async function(){
             let imgId = await Entity.openImgMenuPopup();
             if(imgId != undefined && !$this.editImages.includes(imgId)){
@@ -1459,6 +1597,10 @@ class Entity { // abstract
         if(data.protected!=undefined && this.protected != data.protected){
             this.protected = data.protected;
             this.dom.root.style.display = (this.protected && !this.storyline.gmValidated) ? 'none' : '';
+        }
+
+        if(data.writingProtected!=undefined && this.writingProtected != data.writingProtected){
+            this.writingProtected = data.writingProtected;
         }
 
         if(data.name!=undefined && this.name != data.name){
@@ -1577,11 +1719,13 @@ class Entity { // abstract
     }
 
     edit(){
+        if((this.storyline.writingProtected || this.writingProtected) && !this.gmValidated) return false;
+
         this.foldable = true;
         this.setEditing(true);
         currentlyEditing?.cancelEdit();
         currentlyEditing = this;
-        document.getElementById('edit_overlay').style.display = 'initial';
+        DOMCache.overlays.edit.style.display = 'initial';
         for(let x of document.getElementsByClassName('currently_editing')) x.classList.remove('currently_editing');
         this.dom.root.classList.add('currently_editing');
 
@@ -1613,6 +1757,7 @@ class Entity { // abstract
         this.dom.input.cancelEdit.style.display = 'initial';
         this.closeAfterEdit = !this.open;
         this.toggleOpen(true);
+        return true;
     }
 
     saveEdit(changed){
@@ -1635,7 +1780,7 @@ class Entity { // abstract
         this.setEditing(false);
         currentlyEditing = null;
         this.dom.root.classList.remove('currently_editing');
-        document.getElementById('edit_overlay').style.display = '';
+        DOMCache.overlays.edit.style.display = '';
 
         this.dom.name.innerHTML = this.name;
         this.dom.description.innerHTML = parseMarkup(this.description);
@@ -1754,7 +1899,7 @@ class StorylineInfoEntity extends Entity {
 
     delete(){
         if(!this.confirmDelete(2)) return;
-        this.setEditing(false);
+        this.cancelEdit();
         socket.emit('removeData','StorylineInfoEntity',this.id);
     }
 }
@@ -1778,9 +1923,33 @@ class PlayerEntity extends Entity {
         this.notes = {};
         this.deleteMessages.push('With this also all subelements (items, skills, ...) will be deleted. Do you still want to proceed?');
 
+        this.visible = !hiddenPlayers.has(this.id);
+
         this.dom.icons.draggable.style.display = 'none';
 
-        this.dom.menuTab = document.createNode('div', {className:'secondary_menu_tab',onclick: ()=>this.storyline.openPlayer(this.id)});
+        this.dom.visibilitySetting = {};
+        this.dom.visibilitySetting.nameWrapper = document.createNode('div');
+        this.dom.visibilitySetting.name = this.dom.visibilitySetting.nameWrapper.appendChild(document.createNode('span'));
+        this.dom.visibilitySetting.iconWrapper = document.createNode('div');
+        this.dom.visibilitySetting.icon = this.dom.visibilitySetting.iconWrapper.appendChild(document.createNode('img',{
+            className: 'icon', 
+            src: this.visible?'icons/view.png':'icons/view-off.png',
+            onclick: ()=>this.toggleVisible()
+        }));
+
+        this.dom.menuTab = document.createNode('div', {
+            className:'secondary_menu_tab',
+            onclick: ()=>this.storyline.openPlayer(this.id),
+            oncontextmenu: e=>{
+                e.preventDefault();
+                addMenu.open(e.pageX,e.pageY,
+                    ['Hide',()=>this.toggleVisible(false)],
+                    ['Delete',()=>this.delete()]
+                );
+            }
+        },{
+            display: this.visible ? '' : 'none'
+        });
         this.dom.menuTabs = {};
         this.dom.menuTabs.info = document.createNode('div', {innerHTML:'Info', onclick: ()=>this.openTab('info')});
         this.dom.menuTabs.cells = document.createNode('div', {innerHTML:'Values', onclick: ()=>this.openTab('cells')});
@@ -1799,7 +1968,7 @@ class PlayerEntity extends Entity {
             id:'PlayerEntity_'+this.id+'_items_entities', 
             className:'entity_container'
         }));
-        this.dom.items.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        this.dom.items.root.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
         .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
             addMenu.open(e.pageX,e.pageY,
                 ['Item',()=>this.openAddPopup('items', false)],
@@ -1818,7 +1987,7 @@ class PlayerEntity extends Entity {
             id:'PlayerEntity_'+this.id+'_itemEffects_entities', 
             className:'entity_container'
         }));
-        this.dom.itemEffects.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        this.dom.itemEffects.root.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
         .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
             addMenu.open(e.pageX,e.pageY,
                 ['Item Effect',()=>this.openAddPopup('itemEffects', false)],
@@ -1837,14 +2006,14 @@ class PlayerEntity extends Entity {
             id:'PlayerEntity_'+this.id+'_cells_entities', 
             className:'entity_container'
         }));
-        this.dom.cells.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        this.dom.cells.root.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
         .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
             addMenu.open(e.pageX,e.pageY,
-                ['Dynamic Value',()=>alert('Dynamic Value')],
-                ['Constant Value',()=>alert('Constant Value')],
-                ['Control',()=>alert('Control')],
-                ['Text/Image',()=>alert('Text/Image')],
-                ['Category',()=>alert('Category')]
+                ['Dynamic Value',()=>this.openAddPopup('cells',false,_,'dynamic')],
+                ['Constant Value',()=>this.openAddPopup('cells',false,_,'constant')],
+                ['Control',()=>this.openAddPopup('cells',false,_,'control')],
+                ['Text/Image',()=>this.openAddPopup('cells',false,_,'static')],
+                ['Category',()=>this.openAddPopup('cells',true)]
             );
             e.stopPropagation();
         }}));
@@ -1859,7 +2028,7 @@ class PlayerEntity extends Entity {
             id:'PlayerEntity_'+this.id+'_skills_entities', 
             className:'entity_container'
         }));
-        this.dom.skills.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        this.dom.skills.root.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
         .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
             addMenu.open(e.pageX,e.pageY,
                 ['Skill',()=>this.openAddPopup('skills', false)],
@@ -1878,7 +2047,7 @@ class PlayerEntity extends Entity {
             id:'PlayerEntity_'+this.id+'_notes_entities', 
             className:'entity_container'
         }));
-        this.dom.notes.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        this.dom.notes.root.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
         .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
             addMenu.open(e.pageX,e.pageY,
                 ['Note',()=>this.openAddPopup('notes', false)],
@@ -1972,6 +2141,16 @@ class PlayerEntity extends Entity {
         });
     }
 
+    toggleVisible(value){
+        if(this.visible == value) return;
+        this.visible = !this.visible;
+        this.dom.menuTab.style.display = this.visible ? '' : 'none';
+        this.dom.visibilitySetting.icon.src = this.visible?'icons/view.png':'icons/view-off.png';
+        if(this.visible) hiddenPlayers.delete(this.id);
+        else hiddenPlayers.add(this.id);
+        localStorage.setItem('pnp_hidden_players',Array.from(hiddenPlayers).join(','));
+    }
+
     registerSortableContainers(entity, category){
         if(entity) this.sortables.entities.addContainer(entity);
         if(category) this.sortables.categories.addContainer(category);
@@ -2014,6 +2193,7 @@ class PlayerEntity extends Entity {
         
         if(changedName){
             this.dom.menuTab.innerHTML = this.name;
+            this.dom.visibilitySetting.name.innerHTML = this.name;
             $[this.referenceName] = this;
         }
 
@@ -2111,14 +2291,14 @@ class PlayerEntity extends Entity {
 
     openTab(tab){
         if(tab == undefined){
-            document.getElementById('tertiary_menu').innerHTML = '';
-            document.getElementById('tertiary_menu').appendChild(this.dom.menuTabs.info);
-            document.getElementById('tertiary_menu').appendChild(this.dom.menuTabs.cells);
-            document.getElementById('tertiary_menu').appendChild(this.dom.menuTabs.items);
-            document.getElementById('tertiary_menu').appendChild(this.dom.menuTabs.itemEffects);
-            document.getElementById('tertiary_menu').appendChild(this.dom.menuTabs.skills);
-            document.getElementById('tertiary_menu').appendChild(this.dom.menuTabs.notes);
-            document.getElementById('tertiary_menu').style.display = '';
+            DOMCache.menus.tertiary.innerHTML = '';
+            DOMCache.menus.tertiary.appendChild(this.dom.menuTabs.info);
+            DOMCache.menus.tertiary.appendChild(this.dom.menuTabs.cells);
+            DOMCache.menus.tertiary.appendChild(this.dom.menuTabs.items);
+            DOMCache.menus.tertiary.appendChild(this.dom.menuTabs.itemEffects);
+            DOMCache.menus.tertiary.appendChild(this.dom.menuTabs.skills);
+            DOMCache.menus.tertiary.appendChild(this.dom.menuTabs.notes);
+            DOMCache.menus.tertiary.style.display = '';
 
             let activeSecondaries = document.getElementsByClassName('secondary_menu_active');
             for(let x of activeSecondaries) x.classList?.remove('secondary_menu_active');
@@ -2133,15 +2313,15 @@ class PlayerEntity extends Entity {
         for(let x of activeTertiaries) x.classList?.remove('tertiary_menu_active');
         this.dom.menuTabs[tab]?.classList?.add('tertiary_menu_active');
 
-        document.getElementById('main_content').innerHTML = '';
+        DOMCache.mainContent.innerHTML = '';
         
         if(tab == 'info'){
-            document.getElementById('main_content').appendChild(this.dom.root);
+            DOMCache.mainContent.appendChild(this.dom.root);
         }
         else{
             if(!this.dom[tab]) return;
-            if(tab == 'skills') document.getElementById('main_content').appendChild(skillFilter);
-            document.getElementById('main_content').appendChild(this.dom[tab].root);
+            if(tab == 'skills') DOMCache.mainContent.appendChild(skillFilter);
+            DOMCache.mainContent.appendChild(this.dom[tab].root);
         }
     }
 
@@ -2181,17 +2361,23 @@ class PlayerEntity extends Entity {
 
     delete(){
         if(!this.confirmDelete(3)) return;
-        this.setEditing(false);
+        this.cancelEdit();
         socket.emit('removeData','PlayerEntity',this.id, true);
     }
 
     async openAddPopup(property, category, parentCategory, cellType){
         var wrapper = document.createNode('div',{className:'add_popup_wrapper',onclick: e=> e.stopPropagation()});
 
+        let propertyName = (property == 'notes' ? 'note' : property == 'items' ? 'item' : property == 'itemEffects' ? 'item effect' : property == 'skills' ? 'skill' : '');
+        switch(property){
+            case 'items': propertyName = 'item'; break;
+            case 'notes': propertyName = 'note'; break;
+            case 'itemEffects': propertyName = 'item effect'; break;
+            case 'skills': propertyName = 'skill'; break;
+            case 'cells': propertyName = (cellType ? cellType + ' ' : '') + 'cell'; break;
+        }
         wrapper.appendChild(document.createNode('h3',{
-            innerHTML:'Create new ' +
-                (property == 'notes' ? 'note' : property == 'items' ? 'item' : property == 'itemEffects' ? 'item effect' : property == 'skills' ? 'skill' : 'cell') + 
-                (category ? ' category' : '')
+            innerHTML:'Create new ' + propertyName + (category ? ' category' : '')
         }));
 
         let grid = wrapper.appendChild(document.createNode('div',{className:'add_popup_grid'}));
@@ -2202,8 +2388,19 @@ class PlayerEntity extends Entity {
 
         var templateSelect = {};
         var templateMask = {};
+        let cellControlTypeInput;
 
         if(!category){
+            if(property == 'cells' && cellType == 'control'){
+                grid.appendChild(document.createNode('div',{innerHTML:'Control type:&nbsp;'}));
+                cellControlTypeInput = grid.appendChild(document.createNode('div')).appendChild(document.createNode('select'));
+                cellControlTypeInput.appendChild(document.createNode('option',{innerHTML:'number',value:'number'}));
+                cellControlTypeInput.appendChild(document.createNode('option',{innerHTML:'text',value:'text'}));
+                cellControlTypeInput.appendChild(document.createNode('option',{innerHTML:'checkbox',value:'checkbox'}));
+                cellControlTypeInput.appendChild(document.createNode('option',{innerHTML:'button',value:'button'}));
+                cellControlTypeInput.appendChild(document.createNode('option',{innerHTML:'dropdown',value:'dropdown'}));
+            }
+
             grid.appendChild(document.createNode('div',{innerHTML:'Template:&nbsp;'}));
             let templateSelectSection = grid.appendChild(document.createNode('div'));
 
@@ -2281,6 +2478,7 @@ class PlayerEntity extends Entity {
             if(!nameInput.value) return alert('The name field must not be empty.');
             let template;
             let mask;
+            let data = {name:nameInput.value};
             if(!category){
                 if(property != 'notes' && nameInput.value == 'this') 
                     return alert('\'this\' is a reserved word and cannot be used as a name for an entity of this type.\nHowever, it is fine to use it as part of a name.');
@@ -2291,15 +2489,15 @@ class PlayerEntity extends Entity {
                         break;
                     case 'itemEffects':
                         if(this.effect[getReferenceName(nameInput.value)]) 
-                            return alert('There is already an item with an equivalent name within this player.');
+                            return alert('There is already an item effect with an equivalent name within this player.');
                         break;
                     case 'skills':
                         if(this.skill[getReferenceName(nameInput.value)]) 
-                            return alert('There is already an item with an equivalent name within this player.');
+                            return alert('There is already a skill with an equivalent name within this player.');
                         break;
                     case 'cells':
                         if(this.cell[getReferenceName(nameInput.value)]) 
-                            return alert('There is already an item with an equivalent name within this player.');
+                            return alert('There is already a cell with an equivalent name within this player.');
                         break;
                 }
                 
@@ -2309,12 +2507,20 @@ class PlayerEntity extends Entity {
                     for(let i in templateMask) mask[i] = templateMask[i].checked;
                     mask.path = mask.coordinates;
                 }
+
+                if(property == 'cells'){
+                    if(cellType == 'control'){
+                        if(!cellControlTypeInput.value) return alert('Invalid control type.');
+                        data.cellType = 'control_'+cellControlTypeInput.value
+                    }
+                    else data.cellType = cellType;
+                }
             }
 
             socket.emit(
                 'addData',
                 property.slice(0,1).toUpperCase() + property.slice(1,-1) + (category ? 'Category' : 'Entity'),
-                {name:nameInput.value},
+                data,
                 {
                     loose: !Boolean(parentCategory),
                     parentId: parentCategory ? parentCategory.id : this.id,
@@ -2351,7 +2557,7 @@ class NoteEntity extends Entity {
 
     delete(){
         if(!this.confirmDelete(2)) return;
-        this.setEditing(false);
+        this.cancelEdit();
         socket.emit('removeData','NoteEntity',this.id);
     }
 }
@@ -2388,7 +2594,7 @@ class ItemEntity extends Entity {
         this.dom.effectsLabel = this.dom.grid.appendChild(document.createNode('div',{innerHTML: 'Effects:'},{display:'none'}));
         this.dom.effectsWrapper = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
         this.dom.effects = this.dom.effectsWrapper.appendChild(document.createNode('div'));
-        this.dom.effectsWrapper.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        this.dom.effectsWrapper.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
         .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: ()=>this.addEditEffectElement()}));
     }
     
@@ -2449,12 +2655,12 @@ class ItemEntity extends Entity {
 
     delete(){
         if(!this.confirmDelete(2)) return;
-        this.setEditing(false);
+        this.cancelEdit();
         socket.emit('removeData','ItemEntity',this.id);
     }
 
     edit(){
-        super.edit();
+        if(!super.edit()) return;
         this.dom.amount.style.display = 'none';
         
         this.dom.effectsLabel.style.display = '';
@@ -2569,7 +2775,7 @@ class ItemEffectEntity extends Entity {
         this.dom.itemsLabel = this.dom.grid.appendChild(document.createNode('div',{innerHTML: 'Items:'},{display:'none'}));
         this.dom.itemsWrapper = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
         this.dom.items = this.dom.itemsWrapper.appendChild(document.createNode('div'));
-        this.dom.itemsWrapper.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        this.dom.itemsWrapper.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
         .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: ()=>this.addEditItemElement()}));
 
         this.dom.valueLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML: 'Value:'}), this.dom.descriptionLabel);
@@ -2663,12 +2869,13 @@ class ItemEffectEntity extends Entity {
 
     delete(){
         if(!this.confirmDelete(2)) return;
-        this.setEditing(false);
+        this.cancelEdit();
         socket.emit('removeData','ItemEffectEntity',this.id);
     }
 
     edit(){
-        super.edit();
+        if(!super.edit()) return;
+
         this.dom.itemsLabel.style.display = '';
         this.dom.itemsWrapper.style.display = '';
         this.dom.valueLabel.style.display = 'none';
@@ -2855,12 +3062,13 @@ class SkillEntity extends Entity {
 
     delete(){
         if(!this.confirmDelete(2)) return;
-        this.setEditing(false);
+        this.cancelEdit();
         socket.emit('removeData','SkillEntity',this.id);
     }
 
     edit(){
-        super.edit();
+        if(!super.edit()) return;
+
         this.dom.learnedLabel.style.display = 'none';
         this.dom.learnedWrapper.style.display = 'none';
 
@@ -2914,14 +3122,6 @@ class CellEntity extends Entity {
         this.dom.errorLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML: 'Error:'}), this.dom.descriptionLabel);
         this.dom.error = this.dom.grid.insertBefore(document.createNode('div',_,{color:'red'}), this.dom.descriptionLabel);
 
-        this.dom.valueFunctionLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML:'Value Function: '},{display:'none'}), this.dom.descriptionLabel);
-        this.dom.valueFunctionWrapper = this.dom.grid.insertBefore(document.createNode('div',_,{display:'none'}), this.dom.descriptionLabel);
-        this.dom.input.valueFunction = this.dom.valueFunctionWrapper.appendChild(document.createNode('textarea'));
-
-        this.dom.resetFunctionLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML:'Reset Function: '},{display:'none'}), this.dom.descriptionLabel);
-        this.dom.resetFunctionWrapper = this.dom.grid.insertBefore(document.createNode('div',_,{display:'none'}), this.dom.descriptionLabel);
-        this.dom.input.resetFunction = this.dom.resetFunctionWrapper.appendChild(document.createNode('textarea'));
-
         this.resetError();
     }
     
@@ -2929,7 +3129,7 @@ class CellEntity extends Entity {
         // load entity data via websocket
         socket.on('updateData_CellEntity_'+this.id, (data) => this.update(data));
         const data = await socketRequestData('CellEntity', this.id);
-        await this.update(data);
+        await this.update(data, true);
         if(loadingResolves.CellEntity.get(this.id)) for(let x of loadingResolves.CellEntity.get(this.id)) x(this);
         return this;
     }
@@ -2941,7 +3141,7 @@ class CellEntity extends Entity {
             $.this = this.player;
             let dep = $[match[1]]?.[match[2]]?.[match[3]];
             if(dep) dependencies.push(dep);
-            else if(retry >= 15) throw new Error(match[0] + ' not found after 5 retries');
+            else if(retry >= 10) throw new Error(match[0] + ' not found after 5 retries');
             else{
                 await sleep(1000);
                 return await this.parseFunction(functionString, retry+1);
@@ -2950,7 +3150,7 @@ class CellEntity extends Entity {
         return dependencies;
     }
 
-    async update(data){
+    async update(data, first){
         if(this.editing){
             function recursiveUpdateDataCash(cash, newData){
                 for(let i in newData){
@@ -2976,12 +3176,34 @@ class CellEntity extends Entity {
 
         await super.update(data);
         
-        if(changedName) this.player.cell[this.referenceName] = this;
+        if(changedName){
+            if(this.cellType == 'control_button') this.dom.value.innerHTML = this.name;
+            this.player.cell[this.referenceName] = this;
+        }
 
         if(this.cellType == undefined && data.cellType != undefined){
             this.cellType = data.cellType;
             if(this.cellType == 'dynamic' || this.cellType == 'constant'){
+                this.dom.valueFunctionLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML:'Value Function: '},{display:'none'}), this.dom.descriptionLabel);
+                this.dom.valueFunctionWrapper = this.dom.grid.insertBefore(document.createNode('div',_,{display:'none'}), this.dom.descriptionLabel);
+                this.dom.input.valueFunction = this.dom.valueFunctionWrapper.appendChild(document.createNode('textarea'));
+            }
+            if(this.cellType == 'control_dropdown'){
+                this.dom.valueFunctionLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML:'Options: '},{display:'none'}), this.dom.descriptionLabel);
+                this.dom.valueFunctionWrapper = this.dom.grid.insertBefore(document.createNode('div',_,{display:'none'}), this.dom.descriptionLabel);
+                this.dom.input.valueFunction = this.dom.valueFunctionWrapper.appendChild(document.createNode('textarea'));
+            }
 
+            if(this.cellType == 'dynamic'){
+                this.dom.offsetAbsoluteLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML:'Offset type: '},{display:'none'}), this.dom.descriptionLabel);
+                this.dom.offsetAbsoluteWrapper = this.dom.grid.insertBefore(document.createNode('div',_,{display:'none'}), this.dom.descriptionLabel);
+                this.dom.input.offsetAbsolute = this.dom.offsetAbsoluteWrapper.appendChild(document.createNode('select'));
+                this.dom.input.offsetAbsolute.appendChild(document.createNode('option',{innerHTML:'relative',value:'0'}));
+                this.dom.input.offsetAbsolute.appendChild(document.createNode('option',{innerHTML:'absolute',value:'1'}));
+
+                this.dom.resetFunctionLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML:'Reset Function: '},{display:'none'}), this.dom.descriptionLabel);
+                this.dom.resetFunctionWrapper = this.dom.grid.insertBefore(document.createNode('div',_,{display:'none'}), this.dom.descriptionLabel);
+                this.dom.input.resetFunction = this.dom.resetFunctionWrapper.appendChild(document.createNode('textarea'));
             }
 
             switch(this.cellType){
@@ -2990,6 +3212,7 @@ class CellEntity extends Entity {
                     this.dom.base = this.dom.titleValue.appendChild(document.createNode('span',{innerHTML:'loading...'}));
                     this.dom.titleValue.appendChild(document.createNode('span',{innerHTML:' - '}));
                     this.dom.value = this.dom.titleValue.appendChild(document.createNode('input',{
+                        onclick: e=>e.stopPropagation(),
                         type: 'number',
                         step: 'any',
                         value: 0,
@@ -3018,6 +3241,7 @@ class CellEntity extends Entity {
                 case 'control_number':
                     this.dom.titleValue.appendChild(document.createTextNode(': '));
                     this.dom.value = this.dom.titleValue.appendChild(document.createNode('input',{
+                        onclick: e=>e.stopPropagation(),
                         type: 'number',
                         step: 'any',
                         value: 0,
@@ -3040,6 +3264,7 @@ class CellEntity extends Entity {
                 case 'control_text':
                     this.dom.titleValue.appendChild(document.createTextNode(': '));
                     this.dom.value = this.dom.titleValue.appendChild(document.createNode('input',{
+                        onclick: e=>e.stopPropagation(),
                         onchange: ()=>{
                             let value = this.dom.value.value;
                             if(value != this.savedValue){
@@ -3056,13 +3281,13 @@ class CellEntity extends Entity {
                     this.value = false;
                     this.dom.titleValue.appendChild(document.createTextNode(': '));
                     this.dom.value = this.dom.titleValue.appendChild(document.createNode('button',{
-                        onclick: ()=>{
+                        innerHTML: this.name,
+                        onclick: e=>{
+                            e.stopPropagation();
                             this.value = true;
-                            this.prepareComputeValue();
-                            this.computeValue();
+                            this.fireChangeEvent();
                             this.value = false;
-                            this.prepareComputeValue();
-                            this.computeValue();
+                            this.fireChangeEvent();
                         }
                     }));
                     break;
@@ -3070,6 +3295,7 @@ class CellEntity extends Entity {
                 case 'control_checkbox':
                     this.dom.titleValue.appendChild(document.createTextNode(': '));
                     this.dom.value = this.dom.titleValue.appendChild(document.createNode('input',{
+                        onclick: e=>e.stopPropagation(),
                         type: 'checkbox',
                         onchange: ()=>{
                             let value = this.dom.value.checked;
@@ -3081,6 +3307,28 @@ class CellEntity extends Entity {
                             }
                         }
                     }));
+                    break;
+                
+                case 'control_dropdown':
+                    this.dom.titleValue.appendChild(document.createTextNode(': '));
+                    this.dom.value = this.dom.titleValue.appendChild(document.createNode('select',{
+                        onclick: e=>e.stopPropagation(),
+                        onchange: ()=>{
+                            let value = parseInt(this.dom.value.value);
+                            if(Number.isNaN(value)){
+                                this.dom.value.value = this.savedValue;
+                                if(!this.dom.value.value) this.dom.value.value = 0;
+                                return;
+                            }
+                            if(value != this.savedValue){
+                                this.savedValue = value;
+                                socket.emit('updateData', 'CellEntity', this.id, {savedValue: this.savedValue});
+                                this.prepareComputeValue();
+                                this.computeValue();
+                            }
+                        }
+                    }));
+                    this.dom.value.appendChild(document.createNode('option',{innerHTML:'',value:0}));
                     break;
             }
         }
@@ -3101,14 +3349,19 @@ class CellEntity extends Entity {
 
         if(data.valueFunction != undefined && this.valueFunction != data.valueFunction){
             this.valueFunction = data.valueFunction;
-            this.dom.input.valueFunction.value = this.valueFunction;
-            changedDependencies = true;
+            if(this.dom.input.valueFunction) this.dom.input.valueFunction.value = this.valueFunction;
+            if(this.cellType == 'control_dropdown'){
+                this.dom.value.innerHTML = '';
+                let options = this.valueFunction.split('\n');
+                for(let i in options) this.dom.value.appendChild(document.createNode('option',{innerHTML:options[i],value:i}));
+            }
+            else changedDependencies = true;
             changed = true;
         }
 
         if(data.resetFunction != undefined && this.resetFunction != data.resetFunction){
             this.resetFunction = data.resetFunction;
-            this.dom.input.resetFunction.value = this.resetFunction;
+            if(this.dom.input.resetFunction) this.dom.input.resetFunction.value = this.resetFunction;
             changedDependencies = true;
             changed = true;
         }
@@ -3146,7 +3399,7 @@ class CellEntity extends Entity {
             }
         }
 
-        if(changed){
+        if(changed || first){
             this.prepareComputeValue();
             this.computeValue();
         }
@@ -3204,7 +3457,7 @@ class CellEntity extends Entity {
     }
 
     computeValue(){
-        if(this.finishedComputeValue) return;
+        if(this.finishedComputeValue) return !CELL_DEBUG || console.log(this.name, ', break since already finished');
         if(CELL_DEBUG) console.log(this.name, ', check children: ', this.dependencies.map(x => x.name));
 
         for(let x of this.dependencies){
@@ -3291,7 +3544,7 @@ class CellEntity extends Entity {
     }
 
     edit(){
-        super.edit();
+        if(!super.edit()) return;
 
         this.dom.titleValue.style.display = 'none';
 
@@ -3300,6 +3553,9 @@ class CellEntity extends Entity {
             this.dom.valueFunctionWrapper.style.display = '';
             this.dom.resetFunctionLabel.style.display = '';
             this.dom.resetFunctionWrapper.style.display = '';
+            this.dom.offsetAbsoluteLabel.style.display = '';
+            this.dom.offsetAbsoluteWrapper.style.display = '';
+            this.dom.input.offsetAbsolute.value = this.offsetAbsolute * 1;
         }
         else if(this.cellType == 'constant' || this.cellType == 'control_dropdown'){
             this.dom.valueFunctionLabel.style.display = '';
@@ -3310,32 +3566,42 @@ class CellEntity extends Entity {
     saveEdit(){
         let changed = {};
 
-        if(this.dom.input.valueFunction.value != this.valueFunction) changed.valueFunction = this.dom.input.valueFunction.value;
-        if(this.dom.input.resetFunction.value != this.resetFunction) changed.resetFunction = this.dom.input.resetFunction.value;
+        if(this.dom.input.valueFunction && this.dom.input.valueFunction.value != this.valueFunction) changed.valueFunction = this.dom.input.valueFunction.value;
+        if(this.dom.input.resetFunction && this.dom.input.resetFunction.value != this.resetFunction) changed.resetFunction = this.dom.input.resetFunction.value;
+        if(this.dom.input.offsetAbsolute && Boolean(parseInt(this.dom.input.offsetAbsolute.value)) != this.offsetAbsolute) 
+            changed.offsetAbsolute = Boolean(parseInt(this.dom.input.offsetAbsolute.value));
 
         super.saveEdit(changed);
     }
 
     cancelEdit(){
-        this.dom.input.valueFunction.value = this.valueFunction;
-        this.dom.input.resetFunction.value = this.resetFunction;
+        if(this.dom.input.valueFunction) this.dom.input.valueFunction.value = this.valueFunction;
+        if(this.dom.input.resetFunction) this.dom.input.resetFunction.value = this.resetFunction;
         super.cancelEdit();
     }
 
     reloadDOMVisibility(){
         this.dom.titleValue.style.display = '';
 
-        this.dom.valueFunctionLabel.style.display = 'none';
-        this.dom.valueFunctionWrapper.style.display = 'none';
-        this.dom.resetFunctionLabel.style.display = 'none';
-        this.dom.resetFunctionWrapper.style.display = 'none';
+        if(this.dom.valueFunctionLabel){
+            this.dom.valueFunctionLabel.style.display = 'none';
+            this.dom.valueFunctionWrapper.style.display = 'none';
+        }
+        if(this.dom.resetFunctionLabel){
+            this.dom.resetFunctionLabel.style.display = 'none';
+            this.dom.resetFunctionWrapper.style.display = 'none';
+        }
+        if(this.dom.offsetAbsoluteLabel){
+            this.dom.offsetAbsoluteLabel.style.display = 'none';
+            this.dom.offsetAbsoluteWrapper.style.display = 'none';
+        }
 
         super.reloadDOMVisibility();
     }
 
     delete(){
-        if(!this.confirmDelete(2)) return;
-        this.setEditing(false);
+        if(!this.confirmDelete(1)) return;
+        this.cancelEdit();
         socket.emit('removeData','CellEntity',this.id);
     }
 }
@@ -3419,11 +3685,11 @@ class Category {
 
                 case CellCategory:
                     fields = [
-                        ['Dynamic Value',()=>alert('Dynamic Value')],
-                        ['Constant Value',()=>alert('Constant Value')],
-                        ['Control',()=>alert('Control')],
-                        ['Text/Image',()=>alert('Text/Image')],
-                        ['Category',()=>alert('Category')]
+                        ['Dynamic Value',()=>this.player.openAddPopup('cells',false,this,'dynamic')],
+                        ['Constant Value',()=>this.player.openAddPopup('cells',false,this,'constant')],
+                        ['Control',()=>this.player.openAddPopup('cells',false,this,'control')],
+                        ['Text/Image',()=>this.player.openAddPopup('cells',false,this,'static')],
+                        ['Category',()=>this.player.openAddPopup('cells',true,this)]
                     ];
                     break;
 
@@ -3532,10 +3798,12 @@ class Category {
     }
 
     edit(){
+        if((this.storyline.writingProtected || this.writingProtected) && !this.gmValidated) return false;
+
         this.setEditing(true);
         currentlyEditing?.cancelEdit();
         currentlyEditing = this;
-        document.getElementById('edit_overlay').style.display = 'initial';
+        DOMCache.overlays.edit.style.display = 'initial';
         for(let x of document.getElementsByClassName('currently_editing')) x.classList.remove('currently_editing');
         this.dom.root.classList.add('currently_editing');
 
@@ -3564,7 +3832,7 @@ class Category {
         this.setEditing(false);
         currentlyEditing = null;
         this.dom.root.classList.remove('currently_editing');
-        document.getElementById('edit_overlay').style.display = '';
+        DOMCache.overlays.edit.style.display = '';
 
         this.dom.name.innerHTML = this.name;
         
@@ -3599,7 +3867,7 @@ class Category {
         let removeChildren = !confirm('By default all elements and categories inside this category will be preserved and just moved one category up. '+
             'If you also want to delete them, click \'Cancel\'.');
         if(removeChildren && !confirm('Are you absolutely sure you also want to delete all elements and categories inside this category?')) removeChildren = false;
-        this.setEditing(false);
+        this.cancelEdit();
         socket.emit('removeData',this.type.name,this.id,removeChildren);
     }
 }
@@ -3673,7 +3941,16 @@ class StorylineInfoType {
         this.dom = {};
         this.dom.root = document.createNode('div');
 
-        this.dom.menuTab = document.createNode('div', {className:'secondary_menu_tab',onclick: ()=>this.storyline.openTab(this.id)});
+        this.dom.menuTab = document.createNode('div', {
+            className:'secondary_menu_tab',
+            onclick: ()=>this.storyline.openTab(this.id),
+            oncontextmenu: e=>{
+                e.preventDefault();
+                addMenu.open(e.pageX,e.pageY,
+                    ['Delete',()=>this.delete()]
+                );
+            }
+        });
 
         this.dom.categories = this.dom.root.appendChild(document.createNode('div',{
             id:'StorylineInfoType_'+this.id+'_categories', 
@@ -3685,7 +3962,7 @@ class StorylineInfoType {
         }));
 
         
-        this.dom.root.appendChild(document.createNode('div',{className:'add_element_wrapper'}))
+        this.dom.root.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
         .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
             addMenu.open(e.pageX,e.pageY,
                 ['Info',()=>this.openAddPopup(false)],
@@ -3873,8 +4150,22 @@ class StorylineInfoType {
         for(let x of activeSecondaries) x.classList?.remove('secondary_menu_active');
         this.dom.menuTab.classList?.add('secondary_menu_active');
 
-        document.getElementById('main_content').innerHTML = '';
-        document.getElementById('main_content').appendChild(this.dom.root);
+        DOMCache.mainContent.innerHTML = '';
+        DOMCache.mainContent.appendChild(this.dom.root);
+    }
+
+    confirmDelete(){
+        // TODO: only allow for GM
+        if(!confirm('You are about to delete a whole info type. Are you absolutely sure you know what you are doing?')) return false;
+        if(!confirm('This will also delete all elements inside this type!')) return false;
+        if(!confirm('This action is irreversible and affects a wide range of elements. Are you really certain, you want to proceed?')) return false;
+        if(!confirm('I hope you know, what you are doing. If you are unsure please contact me before proceeding!')) return false;
+        return true;
+    }
+
+    delete(){
+        if(!this.confirmDelete()) return;
+        socket.emit('removeData','StorylineInfoType',this.id, true);
     }
 
     async openAddPopup(category, parentCategory){
@@ -4019,12 +4310,14 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
     document.body.getWidth = function(){
 		var html = document.documentElement;
 		return Math.max(this.scrollWidth, this.offsetWidth, html.clientWidth, html.scrollWidth, html.offsetWidth);
-	}
+    }
+    
+    prepareDOMCache();
 
-    addMenu.dom = document.getElementById('add_menu');
+    addMenu.dom = DOMCache.addMenu;
 
-    popup.popup = document.getElementById('popup');
-    popup.overlay = document.getElementById('popup_overlay');
+    popup.popup = DOMCache.popup;
+    popup.overlay = DOMCache.overlays.popup;
     popup.overlay.onclick = e=>{
         e.stopPropagation();
         popup.close();
@@ -4032,29 +4325,44 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
 
     document.body.onclick = () => addMenu.close();
 
-    document.getElementById('edit_overlay').onclick = ()=>{
+    DOMCache.overlays.edit.onclick = ()=>{
         if(exitEditBehaviour != 'stay' && currentlyEditing) currentlyEditing[exitEditBehaviour]();
     }
 
     await loadPromises.storylines.loaded;
-    if(!currentStoryline) currentStoryline = await (new Storyline(parseInt(localStorage.getItem('pnp_storyline')))).init();
+    let storylineId = parseInt(localStorage.getItem('pnp_storyline'));
+    if(!storylineSelectionOptions.get(storylineId)){
+        storylineId = storylineSelectionOptions.keys().next().value;
+        localStorage.setItem('pnp_storyline',storylineId);
+    }
+    if(!currentStoryline) currentStoryline = await (new Storyline(storylineId)).init();
     currentStoryline.openTab();
 
-    document.getElementById('menu_storyline').onclick = () => currentStoryline.openTab();
-    document.getElementById('menu_players').onclick = () => currentStoryline.openPlayer();
-    document.getElementById('menu_settings').onclick = () => Storyline.openSettingsTab();
+    settings.init();
 
-    if(getParameters.init){
-        Storyline.openSettingsTab();
-        Storyline.openSettingsTab('notifications');
+    DOMCache.menuEntries.storyline.onclick = () =>{
+        openPrimaryTab = 'storyline';
+        currentStoryline.openTab();
+    };
+    DOMCache.menuEntries.players.onclick = () =>{
+        openPrimaryTab = 'players';
+        currentStoryline.openPlayer();
+    };
+    DOMCache.menuEntries.settings.onclick = () => {
+        openPrimaryTab = 'settings';
+        settings.openTab();
     }
 
-    document.getElementById('loading_overlay').style.display = 'none';
+    if(getParameters.init){
+        settings.openTab();
+        settings.openTab('notifications');
+    }
+
+    DOMCache.overlays.loading.style.display = 'none';
 })();
 
 /* TODO/NOTES:
 - value system:
-    - adding cells
     - handling br/hr entries (both empty divs with border or no border)
     - compact mode on/off (toggling icon in filter bar)
     - layout edit mode:
@@ -4062,14 +4370,13 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
         - new line icon after every element -> adds new br
         - every br gets dashed border and some padding (enables clicking) -> turns into hr
         - hr on click removes it
-    - control_dropdown (edit mode -> relabel value function and use for entries)
-    - edit DOM element for offsetAbsolute
 - transfering items
 - settings: 
     - see local TODO
     - storyline
 - dice
 - music
+- migrating old data
 - board
 - map system
 
@@ -4077,6 +4384,8 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
 ISSUES:
 - creating new player from template -> not copying effect mappings correctly
 - Push notifications (old tokens etc.) -> use unique device id and check every at start up
+- deleting does not delete from $ set (can't use delete method, since it's only triggering -> need to use update method)
+- inefficiency of loading faulty cells (with undefined references) -> use loading promises or similar instead of just waiting with timeout
 
 PLANS:
 
@@ -4090,6 +4399,9 @@ PLANS:
     - separate into sections (General, Storyline, Discord)
         - General: Undo Protocol length/Undo/Redo (show protocol in foldable section (display Entity type, name and parameters and parameter values before and after on hover))
         - Storyline: visibility of player entities, removing storyline info types, DM mode (activates visibility of protected entities)
+
+- GM validation via password: protected entities (invisible), writing protection on entities/categories (non transitive) or whole storyline
+    - not yet: sorting prohibited
 
 - tree-like music playlist system (just with category system) containing any supported service, enable user to move any sub-folder into playing tracks (no loose songs on root level)
 - multiple tracks for music, always only one playing but easy to switch (can be filled with temporary songs or saved songs from playlists)

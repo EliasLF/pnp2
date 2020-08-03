@@ -82,7 +82,7 @@ var toBeCached = [ // different levels of versions staticness
 
 var version = {
     current: [0,0,0],
-    delayUntilRecheck: 0,// 30 /* minutes */ * 1000 * 60, // in milliseconds
+    delayUntilRecheck: 30000, // in milliseconds
     lastChecked: 0,
     async recheck(force, updateCache){
         if(!force && (new Date).getTime() - this.lastChecked < this.delayUntilRecheck) return false;
