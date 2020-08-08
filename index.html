@@ -60,6 +60,7 @@
 		<link rel="stylesheet" href="modules/leaflet.css"/>
 	</head>
 	<body class="dark">
+		<div id="widgets"></div>
 		<div id="add_menu"></div>
 		<div id="popup_overlay"><div id="popup"></div></div>
 		<div id="edit_overlay"></div>
@@ -68,7 +69,7 @@
             <div id="primary_menu" class="non_selectable">
 				<div id="menu_storyline">Storyline</div><!--
 				--><div id="menu_players">Players</div><!--
-				--><div id="menu_board">Board</div><!--
+				--><div id="menu_game">Game</div><!--
 				--><div id="menu_music">Music</div><!--
 				--><div id="menu_settings">Settings</div>
 			</div>
@@ -77,8 +78,9 @@
             <div id="main_content"></div>
 		</div>
 		
+		<!-- TODO: load dynamically
 		<script src="modules/leaflet.js"></script>
-		<script src="modules/dragscroll.min.js"></script>
+		<script src="modules/dragscroll.min.js"></script> -->
         <script src="modules/socket.io.min.js"></script>
 		<script src="modules/sortable.min.js"></script>
 		

@@ -11,8 +11,8 @@ if(config.https){
     var app = require('express')();
     var https = require('https');
     var httpsServer = https.createServer({ 
-        key: fs.readFileSync('privkey.pem'),
-        cert: fs.readFileSync('fullchain.pem') 
+        key: fs.readFileSync('/etc/letsencrypt/live/foramitti.com/privkey.pem'),
+        cert: fs.readFileSync('/etc/letsencrypt/live/foramitti.com/fullchain.pem') 
     },app);
     httpsServer.listen(8081);
     var io = require('socket.io').listen(httpsServer);
@@ -24,7 +24,7 @@ const Discord = require('discord.js');
 const ytdl = require('ytdl-core');
 const fetch = require('node-fetch');
 const mailTransport = require('nodemailer').createTransport({
-    host: 'mail.foramitti.com', // TODO: change to localhost (check if still works)
+    host: 'mail.foramitti.com',
     port: 587,
     auth: config.email,
     tls: {
@@ -72,7 +72,7 @@ mysql.safeConnect = function(connectionConfig) {
         }
     });
 
-    this.connection.on('error', function(err) {
+    this.connection.on('error', (err)=>{
         this.connectionReady = false;
         if(err.code === 'PROTOCOL_CONNECTION_LOST') {
             console.log('Lost MySQL connection, reconnecting...');
@@ -295,8 +295,9 @@ var discord = {
         voiceConnection: null,
         dispatcher: null,
         stream: null,
-        queue: [],
-        sockets: [],
+        queueId: 1,
+        queues: new Map([[0,{id:0, name:'Default',queue:[]}]]),
+        currentQueue: 0,
         lastVoiceChannel: null,
 
         async init(guild){
@@ -345,9 +346,40 @@ var discord = {
             this.dispatcher = null;
         },
 
-        getSongIndexById(id){
-            let index = this.queue.map(x => x.id).indexOf(id);
+        getCurrentQueue(){
+            return this.queues.get(this.currentQueue);
+        },
+
+        addQueue(name){
+            let queue = {id:this.queueId, name, queue:[]};
+            this.queues.set(this.queueId, queue);
+            this.queueId++;
+            // TODO: send change to sockets!
+            return queue;
+        },
+
+        removeQueue(queueId){
+            // TODO
+            // check if currentlyPlaying inside queue!
+        },
+
+        renameQueue(queueId, newName){
+            // TODO
+            // send change to sockets!
+        },
+
+        getSongIndexById(id, queue){
+            if(!queue) queue = this.getCurrentQueue();
+            let index = queue.queue.map(x => x.id).indexOf(id);
             return (index >= 0)?index:null;
+        },
+
+        getSongIndexAndQueueById(id){
+            for(let queue of this.queues.values()){
+                let index = this.getSongIndexById(id, queue);
+                if(index != null) return {index,queue};
+            }
+            return null;
         },
 
         async joinVoiceChannel(msg){
@@ -385,10 +417,10 @@ var discord = {
         async play(position=0){
             await this.onready;
             // postion in seconds
-            if(this.queue.length === 0 || !(await this.getVoiceConnection())) return false;
+            if(this.getCurrentQueue().queue.length === 0 || !(await this.getVoiceConnection())) return false;
             if(await this.getDispatcher()) return true;
             if(!this.currentlyPlaying){
-                this.currentlyPlaying = this.queue[0];
+                this.currentlyPlaying = this.getCurrentQueue().queue[0];
                 io.emit('music_currentlyPlaying',this.currentlyPlaying.id);
             }
             [this.dispatcher, this.stream] = this.currentlyPlaying.play(await this.getVoiceConnection(),position);
@@ -398,7 +430,7 @@ var discord = {
             io.emit('music_syncTime',position);
 
             this.dispatcher.on('finish', ()=>{
-                if(!this.autoplay || this.queue.length === 0){
+                if(!this.autoplay || this.getCurrentQueue().queue.length === 0){
                     this.playing = false;
                     this.currentlyPlaying = null;
                     io.emit('music_currentlyPlaying',null);
@@ -463,17 +495,24 @@ var discord = {
 
         async skipToIndex(index){
             await this.onready;
-            if(!this.queue[index]) return false;
+            if(!this.getCurrentQueue().queue[index]) return false;
 
             await this.distroyDispatcher();
-            this.currentlyPlaying = this.queue[index];
+            this.currentlyPlaying = this.getCurrentQueue().queue[index];
             io.emit('music_currentlyPlaying',this.currentlyPlaying.id);
             this.play();
             return true;
         },
 
+        switchQueue(newQueueId){
+            if(!this.queues.get(newQueueId)) return false;
+            this.currentQueue = newQueueId;
+            return true;
+        },
+
         async skipToSong(id){
             await this.onready;
+            // TODO: search in all queues and switch if necessary
             let index = this.getSongIndexById(id);
             if(index == null) return false;
             return await this.skipToIndex(index);
@@ -481,9 +520,10 @@ var discord = {
 
         async next(){
             await this.onready;
-            let index = this.queue.indexOf(this.currentlyPlaying);
+            // TODO: repair logic for multiple queues
+            let index = this.getCurrentQueue().queue.indexOf(this.currentlyPlaying);
             if(index == -1) return false;
-            if(this.autoclean && (!(await this.remove(index, true)) || this.queue.length === 0)){
+            if(this.autoclean && (!(await this.remove(index, true)) || this.getCurrentQueue().queue.length === 0)){
                 this.playing = false;
                 this.currentlyPlaying = null;
                 io.emit('music_currentlyPlaying',null);
@@ -494,9 +534,9 @@ var discord = {
             index = index + 1*(!this.autoclean);
 
             if(this.shuffle){
-                return await this.skipToIndex(Math.floor(Math.random()*this.queue.length));
+                return await this.skipToIndex(Math.floor(Math.random()*this.getCurrentQueue().queue.length));
             }
-            else if(this.queue[index]){
+            else if(this.getCurrentQueue().queue[index]){
                 return await this.skipToIndex(index);
             }
             else{
@@ -514,30 +554,30 @@ var discord = {
 
         async previous(){
             await this.onready;
-            let index = this.queue.indexOf(this.currentlyPlaying);
+            let index = this.getCurrentQueue().queue.indexOf(this.currentlyPlaying);
             if(index == -1) return false;
 
             if(this.shuffle){
-                return await this.skipToIndex(Math.floor(Math.random()*this.queue.length));
+                return await this.skipToIndex(Math.floor(Math.random()*this.getCurrentQueue().queue.length));
             }
-            else if(this.queue[index - 1]){
+            else if(this.getCurrentQueue().queue[index - 1]){
                 return await this.skipToIndex(index - 1);
             }
             else{
-                if(this.wrapAround) return await this.skipToIndex(this.queue.length - 1);
+                if(this.wrapAround) return await this.skipToIndex(this.getCurrentQueue().queue.length - 1);
                 else return await this.skipToIndex(0);
             }
         },
 
         addToQueue(songs){
-            for(let song of songs) this.queue.push(song);
+            for(let song of songs) this.getCurrentQueue().queue.push(song);
             io.emit('music_append',songs);
         },
 
         async clearQueue(){
             await this.onready;
             await this.stop();
-            this.queue = [];
+            this.getCurrentQueue().queue = [];
             this.currentlyPlaying = null;
             io.emit('music_currentlyPlaying',null);
             (await this.getDispatcher())?.end();
@@ -546,13 +586,13 @@ var discord = {
 
         async remove(index, notCheckIfPlaying){
             await this.onready;
-            if(!this.queue[index]) return false;
-            let song = this.queue[index];
+            if(!this.getCurrentQueue().queue[index]) return false;
+            let song = this.getCurrentQueue().queue[index];
             if(!notCheckIfPlaying && song == this.currentlyPlaying){
                 await this.next();
-                if(song != this.queue[index]) return true; // if removed by autoclean
+                if(song != this.getCurrentQueue().queue[index]) return true; // if removed by autoclean
             }
-            this.queue.splice(index,1);
+            this.getCurrentQueue().queue.splice(index,1);
             io.emit('music_remove', song.id);
             return true;
         },
@@ -585,18 +625,39 @@ var discord = {
 };
 discord.server.onready = new Promise(resolve => {discord.server.readyResolve = resolve});
 
-var nextSongId = 1;
+var objectSets = {
+    Queue: new Map(),
+    Song: new Map()
+}
+
+class Queue {
+    static nextId = 0;
+
+    constructor(name, songs){
+        this.id = Queue.nextId++;
+        if(Queue.nextId >= Number.MAX_SAFE_INTEGER) Queue.nextId = 0;
+        objectSets.Queue.set(this.id, this);
+        this.name = name;
+        this.songs = songs; // contains actual objects
+
+        
+    }
+}
+
 class Song {
+    static nextId = 0;
+
     constructor(service, contentId, name, author, thumbnail, duration){
+        this.id = Song.nextId++;
+        if(Song.nextId >= Number.MAX_SAFE_INTEGER) Song.nextId = 0;
+        objectSets.Song.set(this.id, this);
+
         this.service = service;
         this.contentId = contentId;
         this.name = name;
         this.author = author;
         this.thumbnail = thumbnail;
         this.duration = duration;
-
-        this.id = nextSongId++;
-        if(nextSongId >= Number.MAX_SAFE_INTEGER) nextSongId = 1;
     }
 
     play(connection, position=0, stream){
@@ -749,7 +810,7 @@ Original discord message: <a href="${url}">${url}</a>`
             user = await discord.server.guild.members.fetch(user._id);
         }
         catch(e){
-            return console.error('Error while looking for user when sending announcement', e);
+            return console.error('Error while looking for user when sending announcement, id: ', user._id, ', error: ', e);
         }
         if(!user) return console.error('User not found when sending announcement');
         user.send('P&P Announcement:\n' + text + '\n\nOriginal message: ' + url);
@@ -816,7 +877,7 @@ discord.client.on('message', async function(msg){
                 break;
 
             case 'init':
-                msg.channel.send(`Initalization link for <@${msg.author.id}>: https://foramitti.com/pnp/?init=${msg.author.id}`);
+                msg.channel.send(`Initalization link for <@${msg.author.id}>: https://foramitti.com/elias/pnp/?init=${msg.author.id}`);
                 break;
             
             case 'roles':
@@ -935,12 +996,12 @@ discord.client.on('message', async function(msg){
             case 'queue': case 'playlist': case 'list':
                 if(!reply) reply = '';
                 reply += 'Queue:\n';
-                if(discord.server.queue.length === 0) reply += '   *empty*'
-                else for(let i in discord.server.queue){
-                    reply += `${discord.server.queue[i] == discord.server.currentlyPlaying ? ' ▸':'     '} ${parseInt(i)+1}. ${
-                        discord.server.queue[i].name.replace(/\\/g,'\\\\').replace(/`/g,'\\`').replace(/\|/g,'\\|').replace(/\*/g,'\\*').replace(/_/g,'\\_')
+                if(discord.server.getCurrentQueue().queue.length === 0) reply += '   *empty*'
+                else for(let i in discord.server.getCurrentQueue().queue){
+                    reply += `${discord.server.getCurrentQueue().queue[i] == discord.server.currentlyPlaying ? ' ▸':'     '} ${parseInt(i)+1}. ${
+                        discord.server.getCurrentQueue().queue[i].name.replace(/\\/g,'\\\\').replace(/`/g,'\\`').replace(/\|/g,'\\|').replace(/\*/g,'\\*').replace(/_/g,'\\_')
                         .replace(/~/g,'\\~').replace(/>/g,'\\>').replace(/:/g,'\\:').replace(/#(?! )/g,'# ').replace(/@(?! )/g,'@ ')
-                    } (${discord.server.queue[i].service})` + '\n';
+                    } (${discord.server.getCurrentQueue().queue[i].service})` + '\n';
                 }
                 if(reply.length > 1800){
                     reply = reply.split('\n');
@@ -994,10 +1055,85 @@ discord.client.on('message', async function(msg){
 
             case 'dice': case 'd':
                 if(!args[1]){
-                    msg.channel.send('You need to specify a dice with eg. `!dice 2d6` or `!dice 2D6` or `!dice 2 6` with the first number being the number of dice and the second the number of faces.\nSpecial dices:\n- d2^n');
+                    // msg.channel.send('You need to specify a dice with eg. `!dice 2d6` or `!dice 2D6` or `!dice 2 6` with the first number being the number of dice and the second the number of faces.\nSpecial dices:\n- d2^n');
+                    msg.channel.send('You need to specify a dice with eg. `!dice 2d6`');
                     break;
                 }
-                let diceNumber;
+
+                formula = args.slice(1).join(' ');
+
+                let match = formula.search(/[^\s\ddklh\+\-\*\/\^\(\)abs]/i);
+                if(match > 0) return msg.channel.send(`Error: contains invalid character '${formula[match]}' at position ${match}`);
+
+                match = formula.match(/(\d*d\d+(k\d*(l|h)?)?|\+|\-|\*|\/|\^|\(|\)|\d|abs|\s)+/i);
+                if(!match) return msg.channel.send('Error: invalid syntax');
+                if(match.index != 0) return msg.channel.send('Error: invalid syntax at the beginning');
+                if(match[0].length != formula.length) return msg.channel.send(`Error: invalid syntax anywhere starting from postion ${match[0]}: '${formula.slice(match[0].length)}'`);
+
+                let bracket = 0;
+                for(let x of formula){
+                    if(x == '(') bracket++;
+                    else if(x == ')') bracket--;
+                    if(bracket < 0) return msg.channel.send('Error: unbalanced brackets');
+                }
+                if(bracket != 0) return msg.channel.send('Error: unbalanced brackets');
+
+                match = formula.search(/[\+\-\*\/\^]\s*[\+\-\*\/\^\)]/i);
+                if(match > 0) return msg.channel.send(`Error: algebraic symbol at position ${match} is followed directly by another algebraic symbol or closing bracket`);
+
+                match = formula.search(/\(\s*[\+\*\/\^]/i);
+                if(match > 0) return msg.channel.send(`Error: opening bracket at position ${match} is followed directly by algebraic symbol`);
+                match = formula.search(/\(\s*\)/i);
+                if(match > 0) return msg.channel.send(`Error: empty brackets at position ${match}`);
+
+                match = formula.search(/\d*d\d+(k\d*(l|h)?)?\s*(\d*d\d+(k\d*(l|h)?)?|\(|abs)/i);
+                if(match > 0) return msg.channel.send(`Error: dice specifier at position ${match} is not followed by algebraic symbol or closing bracket`);
+
+                match = formula.search(/\d\s*(abs|\()/i);
+                if(match > 0) return msg.channel.send(`Error: number at position ${match} is followed by abs or opening bracket`);
+
+                match = formula.search(/abs\s*[^\s\(]/i);
+                if(match > 0) return msg.channel.send(`Error: abs at position ${match} is not followed by an opening bracket`);
+
+                match = formula.matchAll(/(\d*)d\d+k(\d*)(l|h)?/ig);
+                for(let x of match){
+                    let number = x[1] === '' ? 1 : parseInt(x[1]);
+                    if(!number) return msg.channel.send(`Error: dice specifier '${x[0]}' at position ${x.index} has invalid number of dice`);
+                    let keep = x[2] === '' ? 1 : parseInt(x[2]);
+                    if(!number) return msg.channel.send(`Error: dice specifier '${x[0]}' at position ${x.index} has invalid number of dice to keep`);
+                    if(keep > number) return msg.channel.send(`Error: dice specifier '${x[0]}' at position ${x.index} has invalid number of dice to keep (more than overall number)`);
+                }
+
+                formula = formula.trim();
+                if(formula[0] == '+' || formula[0] == '/' || formula[0] == '*' || formula[0] == '^') return msg.channel.send('Error: invalid syntax at the beginning');
+                let l = formula.length-1;
+                if(formula[l] == '+' || formula[l] == '-' || formula[l] == '/' || formula[l] == '*' || formula[l] == '^') return msg.channel.send('Error: invalid syntax at the end');
+
+
+                formula = formula.toLowerCase().replace(/\s/g,'').replace(/\^/g,'**').replace(/abs/g, 'Math.abs');
+                formula = formula.replace(/(\d*)d(\d+)(k(\d*)(l|h)?)?/ig, function(match, number, faces, keepSubMatch, keep, keepType){
+                    number = parseInt(number);
+                    if(!number) number = 1;
+                    faces = parseInt(faces);
+                    let rolls = [];
+                    for(let i = 0; i < number; i++) rolls.push(Math.ceil(Math.random()*faces));
+                    if(keepSubMatch){
+                        keep = parseInt(keep);
+                        if(!keep) keep = 1;
+                        rolls.sort((a,b)=>a-b);
+                        if(keepType == 'l') rolls = rolls.slice(0,keep);
+                        else rolls = rolls.slice(-keep);
+                    }
+                    return Math.sum(...rolls);
+                });
+                try{
+                    msg.channel.send('Result: ' + eval(formula));
+                }
+                catch(e){
+                    return msg.channel.send('Error during eval: '+e.message);
+                }
+
+                /*let diceNumber;
                 let diceFaces;
                 if(args.length >= 3){
                     diceNumber = parseInt(args[1]);
@@ -1053,7 +1189,7 @@ discord.client.on('message', async function(msg){
                     }
                     reply += '---\n**Result: '+Math.sum(...results)+'**';
                     msg.channel.send(reply);
-                }
+                }*/
             break;
 
             case 'web':
@@ -1068,6 +1204,12 @@ discord.client.on('message', async function(msg){
 \`${discord.PREFIX}init\`: sends a link to connect/initialize the web interface on a new device with the discord user (enables you to adjust cross-device settings like notifications etc.)
 \`${discord.PREFIX}roles\`: provides a list of all available roles
 \`${discord.PREFIX}role add/rem role_name\`: adds/removes roles to/from your discord account (Every storyline has its own role and channel. To prevent cluttering only channels which you are part of are visible to you. You can add/remove roles to control which channels you want to see. The voyeur role enables you to see all channels.)
+\`${discord.PREFIX}subscribe email some.email@address.com\`: adds an email to your email notification list
+\`${discord.PREFIX}unsubscribe email some.email@address.com\`: removes an email from your email notification list
+\`${discord.PREFIX}subscribe discord\`: activates discord private message notifications for you
+\`${discord.PREFIX}unsubscribe discord\`: deactivates discord private message notifications for you
+\`${discord.PREFIX}subscriptions\`: shows all your notification subscriptions
+(For controlling push notifications, you need to use the web interface (Settings > Notifications))
 
 **MUSIC:**
 \`${discord.PREFIX}join\`: joins/switches to the same voice channel as the member, who set off the command, is in
@@ -1091,52 +1233,101 @@ discord.client.on('message', async function(msg){
 \`${discord.PREFIX}info\`: displays current settings and the song queue
 
 **P&P:**
-\`${discord.PREFIX}d dice_specifier\` / \`${discord.PREFIX}dice dice_specifier\`: rolls the dice specified by dice_specifier (dice_specifier of the format eg. \`2d6\` or \`2D6\` or \`2 6\` with the first number determining the number of dice and the second one determining the number of faces or a special dice (eg. 2d2^n , available special dices: 2^n))
+\`${discord.PREFIX}d dice_specifier\` / \`${discord.PREFIX}dice dice_specifier\`: rolls the dice specified by dice_specifier, e.g. \`?d 2d6\` rolls two six-sided dice, adds them up and displays the result (for a full explanation on dice notation please refer to the web interface (Game > Dice))
 `);
             break;
 
 
             case 'subscribe':
                 if(!args[1]){
-                    msg.channel.send('You need to specify a service on which you want to subscribe for anouncements as the 1st argument, e.g. '+discord.PREFIX+'subscribe *email* test@example.com');
+                    msg.channel.send('You need to specify a service on which you want to subscribe for anouncement notifications as the 1st argument, e.g. `'+discord.PREFIX+'subscribe email john.doe@example.com`');
                     break;
                 }
 
                 switch(args[1]){
                     case 'discord':
-
+                        mongodb.collection('DiscordUser').findOneAndUpdate(
+                            {'_id':msg.author.id},
+                            {$set: {'notifications.discord':true}},
+                            {returnOriginal:false}
+                        ).then(user => {
+                            if(user?.value) io.emit('updateDiscordUser_'+user.value._id,user.value);
+                        });
+                        msg.channel.send('Discord private message notifications activated');
                         break;
                     
                     case 'email':
                         if(!args[2]?.includes('@') || args[2].split('@').reduce((res, curr) => res || curr.length == 0, false)){
-                            msg.channel.send('You need to provide an email address as 2nd argument, e.g. '); // TODO: add example
+                            msg.channel.send('You need to provide an email address as 2nd argument, e.g. `'+config.discord.commandPrefix+'subscribe email john.doe@example.com`');
                             break;
                         }
-                        // TODO
-                        break;
-                    
-                    case 'telegram':
-                        if(!args[2]){
-                            msg.channel.send('You need to provide a telegram user id as 2nd argument, e.g. '); // TODO: add example
-                            break;
-                        }
-                        // TODO
+                        mongodb.collection('DiscordUser').findOneAndUpdate(
+                            {'_id':msg.author.id},
+                            {$addToSet: {'notifications.email':args[2]}},
+                            {returnOriginal:false}
+                        ).then(user => {
+                            if(user?.value) io.emit('updateDiscordUser_'+user.value._id,user.value);
+                        });
+                        msg.channel.send(args[2] + ' added to notification list');
                         break;
                     
                     default:
                         if(!args[1]){
-                            msg.channel.send('The provided service (1st argument) is not supported. Supported services: discord, email, telegram');
+                            msg.channel.send('The provided service (1st argument) is not supported. Supported services: discord, email');
                             break;
                         }
                 }
                 break;
 
             case 'unsubscribe':
+                if(!args[1]){
+                    msg.channel.send('You need to specify a service from which you want to unsubscribe as the 1st argument, e.g. `'+discord.PREFIX+'unsubscribe email john.doe@example.com`');
+                    break;
+                }
 
+                switch(args[1]){
+                    case 'discord':
+                        mongodb.collection('DiscordUser').findOneAndUpdate(
+                            {'_id':msg.author.id},
+                            {$set: {'notifications.discord':false}},
+                            {returnOriginal:false}
+                        ).then(user => {
+                            if(user?.value) io.emit('updateDiscordUser_'+user.value._id,user.value);
+                        });
+                        msg.channel.send('Discord private message notifications deactivated');
+                        break;
+                    
+                    case 'email':
+                        if(!args[2]?.includes('@') || args[2].split('@').reduce((res, curr) => res || curr.length == 0, false)){
+                            msg.channel.send('You need to provide an email address as 2nd argument, e.g. `'+config.discord.commandPrefix+'unsubscribe email john.doe@example.com`');
+                            break;
+                        }
+                        mongodb.collection('DiscordUser').findOneAndUpdate(
+                            {'_id':msg.author.id},
+                            {$pull: {'notifications.email':args[2]}},
+                            {returnOriginal:false}
+                        ).then(user => {
+                            if(user?.value) io.emit('updateDiscordUser_'+user.value._id,user.value);
+                        });
+                        msg.channel.send(args[2] + ' removed from notification list');
+                        break;
+                    
+                    default:
+                        if(!args[1]){
+                            msg.channel.send('The provided service (1st argument) is not supported. Supported services: discord, email');
+                            break;
+                        }
+                }
                 break;
             
             case 'subscriptions':
+                let user = await mongodb.collection('DiscordUser').findOne({'_id':msg.author.id});
+                if(!user) msg.channel.send('Error: user not found');
+                msg.channel.send(
+`**Discord private messages:** ${user.notifications?.discord ? 'on' : 'off'}
 
+**Email:**
+${user.notifications?.email?.length ? user.notifications.email.join('\n') : '*none*'}`);
                 break;
             
             default:
@@ -1152,12 +1343,14 @@ discord.client.login(config.discord.botToken).then(() => {
     discord.server.init(guild);
 }).catch(err => console.error('Error when connecting to Discord: '+err.message));
 
+let raisedHandUsers = new Map();
+let diceCollection = new Map();
+let diceId = 0;
 
 io.on('connection', async (socket) => {
 
     await discord.server.onready;
-    discord.server.sockets.push(socket);
-    socket.emit('music_queue', discord.server.queue);
+    socket.emit('music_queue', discord.server.getCurrentQueue().queue);
     socket.emit('music_currentlyPlaying', (discord.server.currentlyPlaying)?discord.server.currentlyPlaying.id:null);
     socket.emit('music_playing', discord.server.playing);
     socket.emit('music_shuffle', discord.server.shuffle);
@@ -1172,8 +1365,8 @@ io.on('connection', async (socket) => {
             socket.broadcast.emit('shifted', [songId, newIndex]);
             let index = discord.server.getSongIndexById(id);
             if(index == null) return;
-            let song = discord.server.queue.splice(index,1)[0];
-            discord.server.queue.splice(newIndex,0,song);
+            let song = discord.server.getCurrentQueue().queue.splice(index,1)[0];
+            discord.server.getCurrentQueue().queue.splice(newIndex,0,song);
         });
     
         socket.on('music_currentlyPlaying', (id)=>discord.server.skipToSong(id));
@@ -1249,13 +1442,68 @@ io.on('connection', async (socket) => {
             }
         });
     }
-    
+
     // DATA CALLS:
     {
+        socket.on('addDice', ()=>{
+            diceCollection.set(diceId,{formula:'2d6',result:0});
+            io.emit('addDice',diceId,'2d6');
+            diceId++;
+        });
+
+        socket.on('removeDice', (id)=>{
+            diceCollection.delete(id);
+            io.emit('removeDice_'+id);
+        });
+
+        socket.on('updateDice', (id, data)=>{
+            let dice = diceCollection.get(id);
+            if(!dice) return;
+            if(data.formula != undefined) dice.formula = data.formula;
+            if(data.result != undefined) dice.result = data.result;
+            io.emit('updateDice_'+id, data);
+        });
+
+        socket.on('requestDice', ()=>{
+            socket.emit('serveDice', Array.from(diceCollection.entries()).map(x => ({id: x[0], result: x[1].result, formula: x[1].formula})));
+        });
+
+        socket.on('raiseHand', async function(id){
+            await discord.server.onready;
+            try{
+                let member = (await discord.server.guild.members.fetch(id));
+                let username = member.nickname ? member.nickname : member.user.username;
+                raisedHandUsers.set(id, username);
+                io.emit('raiseHand',id,username);
+            }
+            catch(e){
+                socket.emit('err','invalid discord user id, please reinitialize your device (via the bot command \''+config.discord.commandPrefix+'init\' on discord)');
+            }
+        });
+
+        socket.on('unraiseHand', function(id){
+            raisedHandUsers.delete(id);
+            io.emit('unraiseHand',id);
+        });
+
+        socket.on('requestRaisedHands', function(){
+            socket.emit('serveRaisedHands', Array.from(raisedHandUsers.entries()));
+        });
+
+
         socket.on('requestDiscordUser', async function(id){
             // check if id is valid
             let user = await mongodb.collection('DiscordUser').findOne({_id:id});
             if(!user) socket.emit('serveDiscordUser',null);
+            await discord.server.onready;
+            try{
+                let member = (await discord.server.guild.members.fetch(user._id));
+                if(member.nickname) user.name = member.nickname;
+                else user.name = member.user.username;
+            }
+            catch(e){
+                console.error('Error while looking for user when serving it, id: ', user._id, ', error: ', e);
+            }
             socket.emit('serveDiscordUser',user);
         });
 
@@ -1337,6 +1585,7 @@ io.on('connection', async (socket) => {
             let tmpData = {};
 
             if(data.protected != undefined) tmpData.protected = Boolean(data.protected);
+            if(data.writingProtected != undefined) tmpData.writingProtected = Boolean(data.writingProtected);
 
             if(data.name != undefined) tmpData.name = String(data.name);
 
@@ -1419,7 +1668,7 @@ io.on('connection', async (socket) => {
                         if(data[property]?.entities != undefined){
                             if(!tmpData[property]) tmpData[property] = {};
                             tmpData[property].entities = data[property].entities;
-                            if(!Array.isArray(tmpData[property].entities) || tmpData[property].entities.some(x => !Number.isInteger(x))){
+                            if(!Array.isArray(tmpData[property].entities) || tmpData[property].entities.some(x => x != 'br' && x != 'hr' && !Number.isInteger(x))){
                                 delete tmpData[property].entities;
                                 error(property+'.entities must be an array of numerical ids');
                             }
@@ -1491,6 +1740,8 @@ io.on('connection', async (socket) => {
                         }
                     }
                     if(tmpData.board && !Object.keys(tmpData.board).length) delete tmpData.board;
+
+                    if(data.writingProtected != undefined) tmpData.writingProtected = Boolean(data.writingProtected);
                     break;
             }
 
@@ -1729,7 +1980,7 @@ io.on('connection', async (socket) => {
                                 tmpData[property].entities = []; 
                         else if(data[property]?.entities == undefined) tmpData[property].entities = [];
                         else tmpData[property].entities = data[property].entities;
-                        if(!Array.isArray(tmpData[property].entities) || tmpData[property].entities.some(x => !Number.isInteger(x)))
+                        if(!Array.isArray(tmpData[property].entities) || tmpData[property].entities.some(x => x != 'br' && x != 'hr' && !Number.isInteger(x)))
                             return error(property+'.entities must be an array of numerical ids');
                         
                         if(template?.[property]?.categories && (!templateMask || (typeof templateMask[property] != 'object' && templateMask[property]) || 

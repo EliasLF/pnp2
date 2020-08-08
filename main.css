@@ -14,6 +14,8 @@
     --backgrnd-color4-hover: rgb(155,155,155);
     --backgrnd-color5: rgb(135,135,135);
     --backgrnd-color5-hover: rgb(125,125,125);
+    --backgrnd-color6: rgb(105,105,105);
+    --backgrnd-color6-hover: rgb(95,95,95);
     --border-highlight-level1: #777;
     --border-highlight-level2: #999;
     --border-highlight-level3: #bbb;
@@ -37,6 +39,8 @@
     --backgrnd-color4-hover: rgb(65,65,65);
     --backgrnd-color5: rgb(70,70,70);
     --backgrnd-color5-hover: rgb(75,75,75);
+    --backgrnd-color6: rgb(80,80,80);
+    --backgrnd-color6-hover: rgb(85,85,85);
     --border-highlight-level1: #777;
     --border-highlight-level2: #555;
     --border-highlight-level3: #333;
@@ -122,6 +126,10 @@ a:hover{
     color: var(--font-color2);
 }
 
+li {
+    margin-bottom: 5px;
+}
+
 code{
     background-color: #1e1e1e;
     color: #ccc;
@@ -137,7 +145,7 @@ code{
     vertical-align: middle;
 }
 
-.edit_icon, .delete_icon, .draggable_icon {
+.edit_icon, .delete_icon, .draggable_icon, .widgetize_icon {
     float: right;
     margin: 0;
     margin-left: 10px;
@@ -403,7 +411,7 @@ code{
     margin-top: 10px;
 }
 
-.content_text::after, .entity_container::after, .add_element_wrapper::before, .category_head::after, .add_popup_wrapper::after, .entity::after{
+.content_text::after, .entity_container::after, .add_element_wrapper::before, .category_head::after, .add_popup_wrapper::after, .entity::after, .cell_br::before, .cell_hr::before{
     content: "";
     display: block;
     clear: both;
@@ -569,6 +577,8 @@ code{
     border: 1px solid var(--border-highlight-level1);
     text-align: left;
     padding: 10px;
+    overflow: auto;
+    max-height: calc(100% - 20px);
 }
 
 .add_popup_wrapper h3{
@@ -606,9 +616,15 @@ code{
     margin-bottom: 10px;
 }
 
+.cell_hr{
+    border-bottom: 1px solid;
+    margin-bottom: 15px;
+}
+
 .cell_title_value{
     display: inline-block;
     line-height: 1.17em;
+    vertical-align: top;
 }
 
 .cell_title_value span, .cell_title_value input{
@@ -617,4 +633,296 @@ code{
 
 .settings_section h2, .settings_section h3{
     margin-bottom: 10px;
+}
+
+
+
+
+#music_menu{
+    background-color: var(--backgrnd-color4)!important;
+    padding: 10px !important;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+    text-align: center;
+    cursor: default;
+}
+
+#music_menu .icon {
+    margin: 5px 7px 0 7px;
+    width: 30px;
+    cursor: pointer;
+}
+
+.button_wrapper{
+    display: inline-block;
+    width: 30px;
+    height: 30px;
+    border-radius: 15px;
+    margin: 0 7px;
+    border: 1px solid gray;
+    cursor: pointer;
+    text-align: center;
+}
+
+.button_wrapper:hover{
+    background-color: rgba(127,127,127,0.1);
+}
+
+.button_wrapper img{
+    height: 20px;
+    filter: var(--icon-invert) var(--icon-brightness);
+    margin-top: 5px;
+}
+
+.active_button_wrapper{
+    background-color: rgba(127,127,127,0.3)!important;
+}
+
+#music_position_wrapper{
+    margin: 10px 0;
+    display: grid;
+    grid-template-columns: 50px 1fr 50px;
+}
+
+#music_position{
+    width: 100%;
+}
+
+#music_position_duration{
+    text-align: right;
+    overflow: hidden;
+}
+
+#music_position_time{
+    text-align: left;
+    overflow: hidden;
+}
+
+#songlist{
+    margin-top: 10px;
+}
+
+.song{
+    padding: 10px !important;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+    display: grid;
+    grid-template: 
+        "a b e" auto
+        "a c e" auto
+        "a d e" auto / auto 1fr auto;
+    background-color: var(--backgrnd-color2)!important;
+}
+
+.song:hover{
+    background-color: var(--backgrnd-color2-hover)!important;
+}
+
+#current_song{
+    background-color: var(--backgrnd-color3)!important;
+}
+
+.song a{
+    cursor: pointer;
+}
+
+.song_title{
+    cursor: default;
+    margin-left: 8px;
+    grid-area: b;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.song_thumbnail{
+    grid-area: a;
+}
+
+.song_thumbnail img{
+    height: 60px;
+}
+
+.song_author{
+    cursor: default;
+    color: var(--faint-text-color);
+    margin-left: 8px;
+    grid-area: c;
+}
+
+.song_service{
+    height: 15px;
+    margin-left: 8px;
+    grid-area: d;
+}
+
+.song_remove{
+    grid-area: e;
+    height: 20px;
+    filter: opacity(75%);
+    cursor: pointer;
+}
+
+
+
+.widget{
+    position: fixed;
+    z-index: 18;
+    width: max-content;
+    left: 0px;
+    top: 0px;
+    padding: 10px;
+
+    background-color: var(--backgrnd-color4);
+    border-left: 5px solid var(--backgrnd-color5);
+    box-shadow: 4px 4px 2px 0px rgba(0,0,0,0.65);
+    cursor: move;
+}
+
+.widget:hover {
+    border-left: 5px solid var(--backgrnd-color6);
+}
+
+.widgets_edit .widget_hide_icon{
+    display: initial!important;
+}
+
+.widget_hide_icon{
+    position: absolute;
+    right: -7px;
+    top: -7px;
+    line-height: 13px;
+    text-align: center;
+    width: 15px;
+    height: 15px;
+    background-color: var(--backgrnd-color2);
+    border: 1px solid var(--font-color3);
+    border-radius: 7.5px;
+    cursor: pointer;
+    display: none;
+}
+
+.error{
+    color: red;
+}
+
+.dice_wrapper{
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px,1fr));
+    gap: 10px;
+}
+
+.dice{
+    display: grid;
+    grid-template: 
+        "a b c" auto
+        "d d d" auto
+        "e e f" auto / auto 1fr auto;
+    margin: 0;
+}
+
+.dice_formula_label{
+    grid-area: a;
+    margin-right: 5px;
+}
+
+.dice_formula{
+    grid-area: b;
+}
+
+.dice_icons{
+    grid-area: c;
+    text-align: right;
+}
+
+.dice_icon_distr{
+    grid-area: f;
+    margin-top: 5px;
+    text-align: right;
+}
+
+.dice_icons img, .dice_icon_distr img{
+    margin-left: 5px;
+    cursor: pointer;
+}
+
+.dice_error{
+    grid-area: d;
+}
+
+.dice_roll{
+    margin-top: 5px;
+    grid-area: e;
+}
+
+.dice_result{
+    margin-top: 5px;
+    grid-area: f;
+}
+
+.dice_roll_icon{
+    cursor: pointer;
+    vertical-align: top;
+}
+
+.unraise_hand_icon{
+    display: inline-block;
+    line-height: 13px;
+    text-align: center;
+    width: 15px;
+    height: 15px;
+    background-color: var(--backgrnd-color2);
+    border: 1px solid var(--font-color3);
+    border-radius: 7.5px;
+    margin-left: 5px;
+    vertical-align: 2px;
+    cursor: pointer;
+}
+
+.life_bar_wrapper{
+    display: grid;
+    grid-template: 
+        "a c d"
+        "b c e";
+}
+
+.life_bar_relative_label{
+    grid-area: a;
+    border-bottom: 1px solid;
+    text-align: center;
+}
+
+.life_bar_total_label{
+    grid-area: b;
+    text-align: center;
+}
+
+.life_bar_relative{
+    grid-area: d;
+    border-bottom: 1px solid;
+    text-align: center;
+}
+
+.life_bar_total{
+    grid-area: e;
+    text-align: center;
+}
+
+.life_bar{
+    grid-area: c;
+    margin: auto 10px;
+}
+
+.life_bar_left, .life_bar_right{
+    display: inline-block;
+    height: 10px;
+}
+
+.life_bar_left{
+    background-color: var(--backgrnd-color1);
+}
+
+.life_bar_right{
+    background-color: var(--backgrnd-color6);
 }

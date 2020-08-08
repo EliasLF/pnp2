@@ -3,6 +3,9 @@
 const _ = undefined;
 
 var getParameters = location.search ? Object.fromEntries(location.search.substr(1).split("&").map(x => x.split("="))) : {};
+for(let i in getParameters){
+    if(getParameters[i] == undefined) getParameters[i] = true;
+}
 if(location.search) history.pushState(null, '', '.');
 
 
@@ -22,7 +25,7 @@ Number.prototype.toFixedMin = function(x){
 }
 
 HTMLElement.prototype.removeFromParent = function(){
-	this.parentNode.removeChild(this);
+	this.parentNode?.removeChild(this);
 }
 Object.defineProperty(HTMLElement.prototype, "removeFromParent", {enumerable: false});
 
@@ -90,8 +93,35 @@ Object.defineProperty(String.prototype, "undefinedIndexOf", {enumerable: false})
 Object.defineProperty(String.prototype, "startsWithCount", {enumerable: false});
 Object.defineProperty(String.prototype, "splitOptional", {enumerable: false});
 
+Math.sum = function(...summands){
+    let s = 0;
+    for(let x of summands){
+        s += x;
+    }
+    return s;
+}
+
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function loadLibrary(src){
+    return new Promise((resolve, reject) => {
+        let script = document.createNode('script',{
+            type: 'application/javascript',
+            src,
+            onload: ()=>resolve(),
+            onerror: ()=>reject(new Error('script '+src+' failed loading'))
+        });
+        document.head.appendChild(script);
+    });
+}
+
+function randomString(length=40){
+    const chars = 'ABCDEFGHIJKLMOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890';
+    let arr = [];
+    for(let i=0; i<length; i++) arr.push(chars[Math.floor(Math.random()*chars.length)]);
+    return arr.join('');
 }
 
 
@@ -233,6 +263,11 @@ addStyleRule('skillNotLearned','.skill_not_learned{}');
 addStyleRule('addElementCategory',
     localStorage.getItem('pnp_pauls_mode') == '0' ? '.add_element_category{display:none;}' : '.add_element_category{}'
 );
+addStyleRule('lastName',
+    parseInt(localStorage.getItem('pnp_only_first_name')) ? '.last_name{display:none;}' : '.last_name{}'
+);
+
+let globalShowWidgets = Boolean(localStorage.getItem('pnp_widgets_global') != '0');
 
 
 var loadPromises = {};
@@ -241,8 +276,7 @@ for(let property of ['socket', 'body', 'storylines']){
     loadPromises[property].loaded = new Promise(resolve => {loadPromises[property].resolve = resolve});
 }
 
-// var socket = io('https://foramitti.com:8081');
-var socket = io('localhost:8081');
+var socket = io(location.origin+':8081');
 
 socket.on('err',(err, ...args)=>alert('Error: '+err+ (args.length ? '\n\n---------------\n\n'+args.map(x => JSON.stringify(x)).join('\n\n') : '')));
 
@@ -255,6 +289,16 @@ else window.onload = loadPromises.body.resolve;
 
 const device = {
     init(){
+        this.id = localStorage.getItem('pnp_device_id');
+        if(!this.id){
+            this.id = randomString(40);
+            localStorage.setItem('pnp_device_id',this.id);
+        }
+        
+        var getParameters = location.search ? Object.fromEntries(location.search.substr(1).split("&").map(x => x.split("="))) : {};
+        if(location.search) history.pushState(null, '', '.');
+
+
         var os = [
             { name: 'Windows Phone', value: 'Windows Phone', version: 'OS' },
             { name: 'Windows', value: 'Win', version: 'NT' },
@@ -420,6 +464,7 @@ function onDiscordUserLoaded(){
     if(parseInt(localStorage.getItem('pnp_push'))) notifications.subscribe();
 
     settings.updateDiscordUser();
+    game.updateDiscordUser();
 }
 
 function initDiscord(){
@@ -481,6 +526,7 @@ async function socketRequestDataImages(id, upperBound){
 }
 
 const CELL_DEBUG = false;
+const DICE_BLINK_DELAY = 100;
 
 var $ = {};
 var currentlyEditing = null;
@@ -501,7 +547,8 @@ var objectSets = {
     CellCategory: new Map(),
     NoteCategory: new Map(),
     BoardEnvironment: new Map(),
-    BoardEntity: new Map()
+    BoardEntity: new Map(),
+    Dice: new Map()
 };
 var currentStoryline;
 
@@ -533,6 +580,12 @@ if(!hiddenPlayers){
 }
 hiddenPlayers = new Set(hiddenPlayers);
 
+var gmValidatedStorylines = localStorage.getItem('pnp_storylines_validated_gm')?.splitOptional(',').map(x => parseInt(x));
+if(!gmValidatedStorylines){
+    localStorage.setItem('pnp_storylines_validated_gm','');
+    gmValidatedStorylines = [];
+}
+
 var DOMCache = {};
 function prepareDOMCache(){
     DOMCache.menus = {};
@@ -543,7 +596,7 @@ function prepareDOMCache(){
     DOMCache.menuEntries = {};
     DOMCache.menuEntries.storyline = document.getElementById('menu_storyline');
     DOMCache.menuEntries.players = document.getElementById('menu_players');
-    DOMCache.menuEntries.board = document.getElementById('menu_board');
+    DOMCache.menuEntries.game = document.getElementById('menu_game');
     DOMCache.menuEntries.music = document.getElementById('menu_music');
     DOMCache.menuEntries.settings = document.getElementById('menu_settings');
 
@@ -558,6 +611,8 @@ function prepareDOMCache(){
     DOMCache.popup = document.getElementById('popup');
 
     DOMCache.addMenu = document.getElementById('add_menu');
+
+    DOMCache.widgets = document.getElementById('widgets');
 }
 
 var storylineSelectionWrapper = document.createNode('div',{className:'content_section category_head'});
@@ -644,7 +699,6 @@ var addMenu = {
     }
 };
 
-
 const popup = {
     close(){
         if(typeof this.onclose == 'function') if(this.onclose() === false) return;
@@ -661,8 +715,44 @@ const popup = {
         for(let x of elems) this.popup.appendChild(x);
         this.popup.style.display = 'initial';
         this.onclose = onclose;
+    },
+
+    info(text, heading){
+        var wrapper = document.createNode('div',{className:'add_popup_wrapper',onclick: e=>e.stopPropagation()});
+
+        if(heading) wrapper.appendChild(document.createNode('h3',{
+            innerHTML:heading
+        }));
+
+        wrapper.appendChild(document.createNode('div',{
+            innerHTML:text
+        }));
+
+        this.open([wrapper]);
+    },
+
+    pwaInfo(){
+        this.info(
+`Progressive Web Apps are essentially websites, but they are setup in a way that they can be run just like a normal stand-alone app by your operating system 
+(e.g. has an icon on your home screen, runs without the usual browser bar above etc.). However, compared to a normal app a PWA usually takes up much less space (&lt;1MB) and is 
+generally more efficient.<br>
+<br>
+A main difference to normal websites is that PWAs provide a small script (so-called service worker) that can be installed and the run while the website or even browser is closed
+to keep up with important tasks while the user is gone, for example listening for a cue from the server to raise a push notification. In the case of this website this is exactly what the 
+service worker does.<br>
+The only other thing the service worker of this website is tasked with is caching all important scripts and resources, saving you a lot of loading time every time you open this website.<br>
+<br>
+It is very easy to install a PWA. Depending on your browser it takes only one or two clicks. Usually there is either a banner on the top or bottom of your browser window asking you, 
+if you want to add this app to your homescreen, alternatively there is a similar entry in your browser menu.<br>
+<a onclick="popup.pwaInstall()">How to install a PWA?<a>`, 'What is a PWA?');
+    },
+
+    pwaInstall(){
+        this.info( // TODO: fill in info
+``, 'How to install a PWA?');
     }
-}
+};
+
 
 var settings = {
     menuTabs: {
@@ -679,6 +769,8 @@ var settings = {
         if(!discordUser) return;
         await this.loaded;
 
+        this.dom.notifications.name.innerHTML = discordUser.name;
+
         if(discordUser.notifications.web.some(x => x.token != notifications.token)){
             this.dom.notifications.push.otherDevices.innerHTML = '';
             for(let x of discordUser.notifications.web){
@@ -687,7 +779,7 @@ var settings = {
                     innerHTML: x.device.os.name + ' ' + x.device.os.version + ', ' + x.device.browser.name + ' ' + x.device.browser.version
                 }));
                 pushDevice.appendChild(document.createNode('img',{
-                    src:'icons/bin-2.png',
+                    src:'icons/bin.png',
                     className:'icon remove_element_icon',
                     onclick: ()=>{
                         pushDevice.removeFromParent();
@@ -719,26 +811,14 @@ var settings = {
     init(){
         // GENERAL:
         {
-            this.dom.general = document.createNode('div',{className: 'content_section settings_section'});
-            this.dom.general.appendChild(document.createNode('h2',{innerHTML:'General Settings'}));
-            let grid = this.dom.general.appendChild(document.createNode('div',{className:'settings_grid'}));
+            this.dom.general = {};
+            this.dom.general.root = document.createNode('div',{className: 'content_section settings_section'});
+            this.dom.general.root.appendChild(document.createNode('h2',{innerHTML:'General Settings'}));
+            let mainGrid = this.dom.general.root.appendChild(document.createNode('div',{className:'settings_grid'}));
 
 
-            grid.appendChild(document.createNode('div',{innerHTML:'Theme:&nbsp;'}));
-            let themeSelect = grid.appendChild(document.createNode('div'))
-            .appendChild(document.createNode('select',{onchange: function(){
-                localStorage.setItem('pnp_theme',this.value);
-                document.body.className = this.value;
-            }}));
-            themeSelect.appendChild(document.createNode('option',{innerHTML:'Dark',value:'dark'}));
-            themeSelect.appendChild(document.createNode('option',{innerHTML:'Light',value:'light'}));
-
-            if(!localStorage.getItem('pnp_theme')) localStorage.setItem('pnp_theme','dark');
-            themeSelect.value = localStorage.getItem('pnp_theme');
-
-
-            grid.appendChild(document.createNode('div',{innerHTML:'Position of new elements:&nbsp;'}));
-            let positionSelect = grid.appendChild(document.createNode('div'))
+            mainGrid.appendChild(document.createNode('div',{innerHTML:'Position of new elements:&nbsp;'}));
+            let positionSelect = mainGrid.appendChild(document.createNode('div'))
             .appendChild(document.createNode('select',{onchange: function(){
                 localStorage.setItem('pnp_new_element_position',this.value);
             }}));
@@ -750,8 +830,8 @@ var settings = {
 
 
             if(!localStorage.getItem('pnp_pauls_mode')) localStorage.setItem('pnp_pauls_mode','1');
-            grid.appendChild(document.createNode('div',{innerHTML:'Adding elements to categories directly (Paul\'s mode):&nbsp;'}));
-            grid.appendChild(document.createNode('div',{}))
+            mainGrid.appendChild(document.createNode('div',{innerHTML:'Enabling adding elements to categories directly (Paul\'s mode):&nbsp;'}));
+            mainGrid.appendChild(document.createNode('div',{}))
             .appendChild(document.createNode('input',{
                 type: 'checkbox',
                 checked: parseInt(localStorage.getItem('pnp_pauls_mode')),
@@ -762,8 +842,8 @@ var settings = {
             }));
 
 
-            grid.appendChild(document.createNode('div',{innerHTML:'Clicking outside while in edit mode:&nbsp;'}));
-            let exitEditSelect = grid.appendChild(document.createNode('div'))
+            mainGrid.appendChild(document.createNode('div',{innerHTML:'Clicking outside while in edit mode:&nbsp;'}));
+            let exitEditSelect = mainGrid.appendChild(document.createNode('div'))
             .appendChild(document.createNode('select',{onchange: function(){
                 localStorage.setItem('pnp_exit_edit',this.value);
                 exitEditBehaviour = this.value;
@@ -776,9 +856,49 @@ var settings = {
             exitEditSelect.value = localStorage.getItem('pnp_exit_edit');
 
 
+            mainGrid.appendChild(document.createNode('div',{innerHTML:'Dice distribution sample size:&nbsp;'}));
+            mainGrid.appendChild(document.createNode('div',{}))
+            .appendChild(document.createNode('input',{
+                type: 'number',
+                min: 1,
+                step: 1,
+                value: Dice.distrSampleSize,
+                onchange: function(){
+                    if(!this.value || this.value < 1){
+                        this.value = Dice.distrSampleSize;
+                    }
+                    else{
+                        Dice.distrSampleSize = parseInt(this.value);
+                        localStorage.setItem('pnp_dice_distr_sample',Dice.distrSampleSize);
+                    }
+                }
+            },{
+                width: '100px'
+            }));
+
+
+
+            this.dom.general.theme = document.createNode('div',{className: 'content_section settings_section'});
+            this.dom.general.theme.appendChild(document.createNode('h3',{innerHTML:'Design'}));
+            let themeGrid = this.dom.general.theme.appendChild(document.createNode('div',{className:'settings_grid'}));
+
+
+            themeGrid.appendChild(document.createNode('div',{innerHTML:'Theme:&nbsp;'}));
+            let themeSelect = themeGrid.appendChild(document.createNode('div'))
+            .appendChild(document.createNode('select',{onchange: function(){
+                localStorage.setItem('pnp_theme',this.value);
+                document.body.className = this.value;
+            }}));
+            themeSelect.appendChild(document.createNode('option',{innerHTML:'Dark',value:'dark'}));
+            themeSelect.appendChild(document.createNode('option',{innerHTML:'Light',value:'light'}));
+
+            if(!localStorage.getItem('pnp_theme')) localStorage.setItem('pnp_theme','dark');
+            themeSelect.value = localStorage.getItem('pnp_theme');
+
+
             if(!localStorage.getItem('pnp_category_indent')) localStorage.setItem('pnp_category_indent',15);
-            grid.appendChild(document.createNode('div',{innerHTML:'Category indentation:&nbsp;'}));
-            let categoryIndent = grid.appendChild(document.createNode('div'));
+            themeGrid.appendChild(document.createNode('div',{innerHTML:'Category indentation:&nbsp;'}));
+            let categoryIndent = themeGrid.appendChild(document.createNode('div'));
             categoryIndent.appendChild(document.createNode('input',{
                 type: 'number',
                 min: 0,
@@ -792,6 +912,32 @@ var settings = {
                 }
             }));
             categoryIndent.appendChild(document.createTextNode(' pixel'));
+
+
+            if(!localStorage.getItem('pnp_only_first_name')) localStorage.setItem('pnp_only_first_name','0');
+            themeGrid.appendChild(document.createNode('div',{innerHTML:'Show only first name in player menu:&nbsp;'}));
+            themeGrid.appendChild(document.createNode('div',{}))
+            .appendChild(document.createNode('input',{
+                type: 'checkbox',
+                checked: parseInt(localStorage.getItem('pnp_only_first_name')),
+                onchange: function(){
+                    localStorage.setItem('pnp_only_first_name',this.checked * 1);
+                    styleRules.lastName.style.display = this.checked ? 'none' : '';
+                }
+            }));
+
+            if(!localStorage.getItem('pnp_widgets_global')) localStorage.setItem('pnp_widgets_global','1');
+            themeGrid.appendChild(document.createNode('div',{innerHTML:'Show widgets outside of game tab:&nbsp;'}));
+            themeGrid.appendChild(document.createNode('div',{}))
+            .appendChild(document.createNode('input',{
+                type: 'checkbox',
+                checked: globalShowWidgets,
+                onchange: function(){
+                    globalShowWidgets = this.checked;
+                    localStorage.setItem('pnp_widgets_global',globalShowWidgets * 1);
+                    DOMCache.widgets.style.display = globalShowWidgets ? '' : 'none';
+                }
+            }));
         }
 
         // NOTIFICATIONS:
@@ -816,6 +962,9 @@ var settings = {
 
             this.dom.notifications.main = document.createNode('div',{className: 'content_section settings_section'});
             this.dom.notifications.main.appendChild(document.createNode('h2',{innerHTML:'Notification Settings'}));
+            this.dom.notifications.name = this.dom.notifications.main.appendChild(document.createNode('div',{innerHTML: 'Initialized discord user: '},{marginBottom:'10px'}))
+            .appendChild(document.createNode('b'));
+
             this.dom.notifications.main.appendChild(document.createNode('div',{
                 innerHTML:
 `Here you can set additional ways of being notified about important announcements regarding game sessions (dates, etc.) besides the usual @everyone ping on the discord server.<br><br>
@@ -830,23 +979,19 @@ You can manage your roles via the bot command <code>?role add/remove role_name</
             this.dom.notifications.push.root.appendChild(document.createNode('h3',{innerHTML:'Push notifications'}));
             let pushInfoSection = this.dom.notifications.push.root.appendChild(document.createNode('div',{
                 innerHTML:
-`Push notifications are messages from apps that appear somewhere on the main screen even if the app is closed. 
-This method <b><i>only reliably works on mobile devices</i></b> and after installing this website as a PWA 
-(which essentially just means creating a link to it on your homescreen taking two clicks (browser menu &#8594; 'add to home screen' or something similar depending on your browser))<br>
-If you are sceptical or want to know more:<br>`
+`Push notifications are messages from apps that appear in the notification bar of your operating system even if the app is closed. 
+This method <b><i>only works reliably on mobile devices and after installing this website as a PWA</i></b> 
+(which essentially just means creating a link to it on your homescreen)<br><br>
+If you want to know more:<br>`
             },{marginBottom:'30px'}));
             pushInfoSection.appendChild(document.createNode('a',{
                 innerHTML: 'What is a PWA?',
-                onclick: ()=>{
-                    // TODO: open popup with explanation
-                }
+                onclick: ()=>popup.pwaInfo()
             }));
             pushInfoSection.appendChild(document.createNode('br'));
             pushInfoSection.appendChild(document.createNode('a',{
-                innerHTML: 'How to install a PWA on my specific device?',
-                onclick: ()=>{
-                    // TODO: open popup with explanation
-                }
+                innerHTML: 'How to install a PWA?',
+                onclick: ()=>popup.pwaInstall()
             }));
 
             if(!localStorage.getItem('pnp_push')) localStorage.setItem('pnp_push','0');
@@ -868,7 +1013,7 @@ If you are sceptical or want to know more:<br>`
                     else notifications.unsubscribe();
                 }
             });
-            this.dom.notifications.push.error = document.createNode('span',_,{color:'red',marginLeft:'5px'});
+            this.dom.notifications.push.error = document.createNode('span',{className:'error'},{marginLeft:'5px'});
             
             this.dom.notifications.push.unavailable = document.createNode('span',{innerHTML:'Not available on this device'});
             
@@ -917,6 +1062,24 @@ If you are sceptical or want to know more:<br>`
             grid.appendChild(document.createNode('div',{innerHTML:'Player visibility:&nbsp;'}));
             this.dom.storyline.playerVisibility = grid.appendChild(document.createNode('div',{className:'settings_grid'}));
 
+            this.dom.storyline.gmSettings = document.createNode('div',{className: 'content_section settings_section'});
+            this.dom.storyline.gmSettings.appendChild(document.createNode('h3',{innerHTML:'GM Settings'}));
+            this.dom.storyline.gmSettings.appendChild(document.createNode('span',{innerHTML:'Login as GM: '}));
+            this.dom.storyline.gmSettings.appendChild(document.createNode('input',{
+                type: 'password',
+                onchange: function(){
+                    if(currentStoryline.validateGM(this.value)){
+                        loginSuccess.style.display = '';
+                    }
+                }
+            }));
+            var loginSuccess = this.dom.storyline.gmSettings.appendChild(document.createNode('span',
+                {innerHTML:' Successfully logged in. Please reload website.'},
+                {display:'none'}
+            ));
+
+
+
             this.initStoryline(currentStoryline);
         }
 
@@ -932,7 +1095,7 @@ If you are sceptical or want to know more:<br>`
             onchange: ()=>this.updateEmails()
         }));
         emailElement.appendChild(document.createNode('img',{
-            src:'icons/bin-2.png',
+            src:'icons/bin.png',
             className:'icon remove_element_icon',
             onclick: ()=>{
                 emailElement.removeFromParent();
@@ -968,9 +1131,9 @@ If you are sceptical or want to know more:<br>`
             DOMCache.menuEntries.settings.classList?.add('primary_menu_active');
 
             DOMCache.menus.secondary.innerHTML = '';
-            DOMCache.menus.secondary.appendChild(settings.menuTabs.general);
-            DOMCache.menus.secondary.appendChild(settings.menuTabs.storyline);
-            DOMCache.menus.secondary.appendChild(settings.menuTabs.notifications);
+            DOMCache.menus.secondary.appendChild(this.menuTabs.general);
+            DOMCache.menus.secondary.appendChild(this.menuTabs.storyline);
+            DOMCache.menus.secondary.appendChild(this.menuTabs.notifications);
             DOMCache.menus.secondary.style.display = '';
 
             DOMCache.menus.tertiary.style.display = 'none';
@@ -981,11 +1144,12 @@ If you are sceptical or want to know more:<br>`
         this.currentOpenTab = tab;
         let activeSecondaries = document.getElementsByClassName('secondary_menu_active');
         for(let x of activeSecondaries) x.classList?.remove('secondary_menu_active');
-        settings.menuTabs[tab].classList?.add('secondary_menu_active');
+        this.menuTabs[tab].classList?.add('secondary_menu_active');
 
         DOMCache.mainContent.innerHTML = '';
         if(tab == 'general'){
-            DOMCache.mainContent.appendChild(this.dom.general);
+            DOMCache.mainContent.appendChild(this.dom.general.root);
+            DOMCache.mainContent.appendChild(this.dom.general.theme);
         }
 
         else if(tab == 'storyline'){
@@ -993,6 +1157,7 @@ If you are sceptical or want to know more:<br>`
             storylineSelection.value = currentStoryline.id;
 
             DOMCache.mainContent.appendChild(this.dom.storyline.root);
+            DOMCache.mainContent.appendChild(this.dom.storyline.gmSettings);
         }
 
         else if(tab == 'notifications'){
@@ -1015,6 +1180,829 @@ If you are sceptical or want to know more:<br>`
     }
 };
 settings.loaded = new Promise(resolve => {settings.loadedResolve = resolve});
+
+class Song {
+    constructor(){
+        // TODO:
+        this.service = 'YouTube';
+        this.contentId = 'G1B4hAr3Ark';
+        this.thumbnail = 'https://i.ytimg.com/vi/G1B4hAr3Ark/hqdefault.jpg?sqp=-oaymwEZCPYBEIoBSFXyq4qpAwsIARUAAIhCGAFwAQ==&rs=AOn4CLD-Xz9FF2vNF9zL9HQ8v_wCkcwJ-g';
+        this.name = 'Hugo Kant - Out Of Time';
+        this.author = {
+            name: 'Seven Beats Music'
+        };
+
+        this.dom = {};
+        this.dom.root = document.createNode('div', {
+            className:'song content_section',
+            onclick: ()=>{
+                console.log('play ',this.contentId);
+                document.getElementById('current_song')?.removeAttribute('id');
+                this.dom.root.id = 'current_song';
+                // socket.emit('currentlyPlaying',song.id);
+            }
+        });
+        this.dom.root.appendChild(document.createNode('div', {className:'song_thumbnail non_selectable'}))
+            .appendChild(document.createNode('a', {target:'_blank', href:(this.service == 'YouTube')?'https://www.youtube.com/watch?v='+this.contentId:''}))
+            .appendChild(document.createNode('img', {
+                loading: 'lazy',
+                src:this.thumbnail
+            }));
+        this.dom.title = this.dom.root.appendChild(document.createNode('div', {className:'song_title', innerHTML:this.name}));
+        this.dom.author = this.dom.root.appendChild(document.createNode('div', {className:'song_author', innerHTML:this.author.name}));
+        this.dom.service = this.dom.root.appendChild(document.createNode('img', {
+            className:'song_service non_selectable', 
+            src: (this.service == 'YouTube')?'icons/youtube.png':''
+        }));
+        this.dom.remove = this.dom.root.appendChild(document.createNode('img', {className:'song_remove non_selectable', src:'icons/cross.png', onclick: e=>{
+            e.stopPropagation();
+            console.log('remove ',this.contentId);
+            // socket.emit('remove',song.id);
+        }}));
+    }
+}
+
+var music = {
+    menuTabs: {
+        player: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Player',onclick: ()=>music.openTab('player')}),
+        noise: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Noise',onclick: ()=>music.openTab('noise')}),
+        playlists: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Playlists',onclick: ()=>music.openTab('playlists')})
+    },
+
+    dom: {},
+
+    currentOpenTab: 'player',
+
+    init(){
+        this.dom.player = {};
+        this.dom.player.root = document.createNode('div', {id:'music_player'});
+        this.dom.player.menu = this.dom.player.root.appendChild(document.createNode('div', {id:'music_menu', className: 'content_section non_selectable'}));
+
+        this.dom.player.menuButtons = {
+            previous: this.dom.player.menu.appendChild(document.createNode('img', {className:'icon',src:'icons/previous2.png'})),
+            play: this.dom.player.menu.appendChild(document.createNode('img', {className:'icon',src:'icons/play2.png'})),
+            stop: this.dom.player.menu.appendChild(document.createNode('img', {className:'icon',src:'icons/stop2.png'})),
+            next: this.dom.player.menu.appendChild(document.createNode('img', {className:'icon',src:'icons/next2.png'})),
+        };
+
+        this.dom.player.positionWrapper = this.dom.player.menu.appendChild(document.createNode('div', {id: 'music_position_wrapper'}));
+        this.dom.player.time = this.dom.player.positionWrapper.appendChild(document.createNode('div', {id: 'music_position_time'}));
+        this.dom.player.position = this.dom.player.positionWrapper.appendChild(document.createNode('div'))
+            .appendChild(document.createNode('input',{
+                type: 'range',
+                id: 'music_position',
+                min: 0,
+                max: 1,
+                step: 'any'
+            }));
+        this.dom.player.duration = this.dom.player.positionWrapper.appendChild(document.createNode('div', {id: 'music_position_duration'}));
+
+        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper'}))
+            .appendChild(document.createNode('img', {src: 'icons/replay.png'}));
+        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper'}))
+            .appendChild(document.createNode('img', {src: 'icons/shuffle.png'}));
+        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper'}))
+            .appendChild(document.createNode('img', {src: 'icons/autoclean.png'}));
+        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper'}))
+            .appendChild(document.createNode('img', {src: 'icons/wraparound2.png'}));
+        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper'}))
+            .appendChild(document.createNode('img', {src: 'icons/autoplay.png'}));
+
+        
+        this.dom.player.songlist = this.dom.player.root.appendChild(document.createNode('div', {id:'songlist'}));
+        let test = new Song();
+        this.dom.player.songlist.appendChild(test.dom.root);
+        test = new Song();
+        this.dom.player.songlist.appendChild(test.dom.root);
+        test = new Song();
+        this.dom.player.songlist.appendChild(test.dom.root);
+    },
+
+    openTab(tab){
+        if(tab == undefined){
+            let activePrimaries = document.getElementsByClassName('primary_menu_active');
+            for(let x of activePrimaries) x.classList?.remove('primary_menu_active');
+            DOMCache.menuEntries.music.classList?.add('primary_menu_active');
+
+            DOMCache.menus.secondary.innerHTML = '';
+            DOMCache.menus.secondary.appendChild(this.menuTabs.player);
+            // DOMCache.menus.secondary.appendChild(this.menuTabs.noise);
+            // DOMCache.menus.secondary.appendChild(this.menuTabs.playlists);
+            DOMCache.menus.secondary.style.display = '';
+
+            DOMCache.menus.tertiary.style.display = 'none';
+
+            return this.openTab(this.currentOpenTab);
+        }
+
+        this.currentOpenTab = tab;
+        let activeSecondaries = document.getElementsByClassName('secondary_menu_active');
+        for(let x of activeSecondaries) x.classList?.remove('secondary_menu_active');
+        this.menuTabs[tab].classList?.add('secondary_menu_active');
+
+        DOMCache.mainContent.innerHTML = '';
+        if(tab == 'player'){
+            DOMCache.mainContent.appendChild(this.dom.player.root);
+        }
+
+        else if(tab == 'noise'){
+        }
+
+        else if(tab == 'playlists'){
+        }
+    }
+};
+
+class Widget {
+    constructor(domElement, options){
+        this.dom = {};
+        this.dom.root = domElement;
+        this.dom.root.classList.add('widget');
+
+        this.dom.hideIcon = this.dom.root.appendChild(document.createNode('div',{
+            className:'widget_hide_icon',
+            innerHTML:'x',
+            onclick: e=>{
+                e.stopPropagation();
+                this.hide();
+            }
+        }));
+
+        if(options?.handle) this.dom.handle = options.handle;
+        if(options?.x) this.x = options.x;
+        else this.x = 0.5;
+        if(options?.y) this.y = options.y;
+        else this.y = 0.5;
+
+        this.setPosition();
+
+        if (this.dom.handle) {
+            // if present, the handle is where you move the element from
+            this.dom.handle.onmousedown = this.dom.handle.ontouchstart = e=>this.mousedown(e);
+        } else {
+            // otherwise, move the element from anywhere inside the element
+            this.dom.root.onmousedown = this.dom.root.ontouchstart = e=>this.mousedown(e);
+        }
+    }
+    
+    mousedown(e) {
+        e.preventDefault();
+    
+        this.bodyWidth = document.body.getWidth();
+        this.bodyHeight = document.body.getHeight();
+        this.offsetWidth = this.dom.root.offsetWidth;
+        this.offsetHeight = this.dom.root.offsetHeight;
+        this.bodyWidthPad = this.bodyWidth - this.offsetWidth;
+        this.bodyHeightPad = this.bodyHeight - this.offsetHeight;
+
+        this.mousePosX = e.clientX ?? e.touches[0]?.clientX;
+        this.mousePosY = e.clientY ?? e.touches[0]?.clientY;
+        this.dom.root.style.transform = 'translate(0,0)';
+        this.dom.root.style.left = (this.dom.root.offsetLeft - this.offsetWidth*this.x) + "px";
+        this.dom.root.style.top = (this.dom.root.offsetTop - this.offsetHeight*this.y) + "px";
+        document.onmouseup = document.ontouchend = e=>this.mouseup(e);
+        document.onmousemove = document.ontouchmove = e=>this.mousemove(e);
+    }
+    
+    mousemove(e) {
+        e.preventDefault();
+    
+        let clientX = e.clientX ?? e.touches[0]?.clientX;
+        let clientY = e.clientY ?? e.touches[0]?.clientY;
+        let updateX = this.dom.root.offsetLeft - (this.mousePosX - clientX);
+        let updateY = this.dom.root.offsetTop - (this.mousePosY - clientY);
+        if(updateX >= 0 && updateX < this.bodyWidthPad) this.dom.root.style.left = updateX + "px";
+        if(updateY >= 0 && updateY < this.bodyHeightPad) this.dom.root.style.top = updateY + "px";
+        this.mousePosX = clientX;
+        this.mousePosY = clientY;
+    }
+
+    mouseup() {
+        document.onmouseup = document.ontouchend = null;
+        document.onmousemove = document.ontouchmove = null;
+        this.x = this.dom.root.offsetLeft / (document.body.getWidth() - this.dom.root.offsetWidth);
+        this.y = this.dom.root.offsetTop / (document.body.getHeight() - this.dom.root.offsetHeight);
+        this.setPosition();
+    }
+
+    setPosition(x, y){
+        if(x != undefined) this.x = x;
+        if(y != undefined) this.y = y;
+        if(this.x > 1) this.x = 1;
+        if(this.x < 0) this.x = 0;
+        if(this.y > 1) this.y = 1;
+        if(this.y < 0) this.y = 0;
+        this.dom.root.style.left = (100*this.x) + "vw";
+        this.dom.root.style.top = (100*this.y) + "vh";
+        this.dom.root.style.transform = `translate(-${100*this.x}%,-${100*this.y}%)`;
+    }
+
+    show(){
+        DOMCache.widgets.appendChild(this.dom.root);
+    }
+
+    hide(){
+        this.dom.root.removeFromParent();
+        if(this.onclose) this.onclose();
+    }
+}
+
+class LifeBarWidget extends Widget{
+    constructor(cell1, cell2, options){
+        let root = document.createNode('div', {className:'life_bar_wrapper'});
+        super(root, options);
+
+        this.cells = [cell1, cell2]; // after update first entry always has smaller value
+
+        this.dom.relativeLabel = this.dom.root.appendChild(document.createNode('div', {className:'life_bar_relative_label'}));
+        this.dom.totalLabel = this.dom.root.appendChild(document.createNode('div', {className:'life_bar_total_label'}));
+        this.dom.lifeBar = this.dom.root.appendChild(document.createNode('div', {className:'life_bar'}));
+        this.dom.lifeBarLeft = this.dom.lifeBar.appendChild(document.createNode('div', {className:'life_bar_left'}));
+        this.dom.lifeBarRight = this.dom.lifeBar.appendChild(document.createNode('div', {className:'life_bar_right'}));
+        this.dom.relativeValue = this.dom.root.appendChild(document.createNode('div', {className:'life_bar_relative'}));
+        this.dom.totalValue = this.dom.root.appendChild(document.createNode('div', {className:'life_bar_total'}));
+
+        this.update();
+    }
+
+    update(){
+        if(this.cells[0].value > this.cells[1].value) this.cells.reverse();
+
+        this.dom.relativeLabel.innerHTML = this.cells[0].name;
+        this.dom.totalLabel.innerHTML = this.cells[1].name;
+        this.dom.relativeValue.innerHTML = this.cells[0].value;
+        this.dom.totalValue.innerHTML = this.cells[1].value;
+        if(this.cells[0].value < 0 || this.cells[1].value <= 0){
+            this.dom.lifeBarLeft.style.width = '0';
+            this.dom.lifeBarRight.style.width = '0';
+        }
+        else{
+            let relativePart = 100*this.cells[0].value/this.cells[1].value;
+            this.dom.lifeBarLeft.style.width = relativePart + 'px';
+            this.dom.lifeBarRight.style.width = (100-relativePart) + 'px';
+        }
+    }
+}
+
+class Dice {
+    static distrSampleSize = 10000;
+
+    constructor(id, formula, result){
+        this.id = id;
+        this.formula = formula;
+        this.result = result ? result : 0;
+        objectSets.Dice.set(id, this);
+
+        this.dom = {};
+        this.dom.root = game.dom.dice.dice.appendChild(document.createNode('div',{className:'content_section dice'}));
+        this.dom.root.appendChild(document.createNode('div',{innerHTML:'Dice: ', className:'dice_formula_label'}));
+        this.dom.formula = this.dom.root.appendChild(document.createNode('input',{
+            value:this.formula,
+            className:'dice_formula',
+            onchange: ()=>this.setFormula(this.dom.formula.value)
+        }));
+        let iconWrapper = this.dom.root.appendChild(document.createNode('div',{className:'dice_icons'}));
+        iconWrapper.appendChild(document.createNode('img',{
+            className: 'icon',
+            src:'icons/bin.png',
+            onclick: ()=>this.delete()
+        }));
+        this.dom.widgetize = iconWrapper.appendChild(document.createNode('img',{
+            className: 'icon',
+            src:'icons/widgetize.png',
+            onclick: ()=>{
+                this.dom.widgetize.style.display = 'none';
+                this.widget.show();
+            }
+        }));
+
+        this.dom.root.appendChild(document.createNode('div',{className:'dice_icon_distr'}))
+        .appendChild(document.createNode('img',{
+            className: 'icon',
+            src:'icons/dice_distr.png',
+            onclick: ()=>this.showDistribution()
+        }));
+
+        this.dom.error = this.dom.root.appendChild(document.createNode('div',{className:'error dice_error'},{display:'none'}));
+        let rollWrapper = this.dom.root.appendChild(document.createNode('div',{className:'dice_roll'}))
+        rollWrapper.appendChild(document.createNode('img',{
+            className:'icon dice_roll_icon',
+            src: 'icons/roll_dice.png',
+            onclick: ()=>this.roll()
+        }));
+        rollWrapper.appendChild(document.createTextNode(' '));
+        this.dom.result = rollWrapper.appendChild(document.createNode('b',{innerHTML:this.result}));
+
+        this.dom.widget = {};
+        this.dom.widget.root = document.createNode('div',{innerHTML:'<b>Dice: </b>'});
+        this.dom.widget.formula = this.dom.widget.root.appendChild(document.createNode('span',{innerHTML:this.formula}));
+        this.dom.widget.root.appendChild(document.createTextNode(' '));
+        this.dom.widget.root.appendChild(document.createNode('img',{
+            className:'icon dice_roll_icon',
+            src: 'icons/roll_dice.png',
+            onmousedown: e=>e.stopPropagation(),
+            onclick: e=>{
+                e.stopPropagation();
+                this.roll();
+            }
+        }));
+        this.dom.widget.root.appendChild(document.createTextNode(' '));
+        this.dom.widget.result = this.dom.widget.root.appendChild(document.createNode('b',{innerHTML:this.result}));
+        this.dom.widget.error = this.dom.widget.root.appendChild(document.createNode('div',{className:'error'},{display:'none'}));
+
+        this.widget = new Widget(this.dom.widget.root);
+        this.widget.onclose = ()=>{
+            this.dom.widgetize.style.display = '';
+        };
+
+        socket.on('updateDice_'+this.id, (data) => this.update(data));
+
+        socket.on('removeDice_'+this.id, () => this.remove());
+    }
+
+    setFormula(formula){
+        let error = this.check(formula);
+        
+        if(error){
+            return this.setError(error, true);
+        }
+        else{
+            this.resetError();
+            this.update({formula});
+            socket.emit('updateDice',this.id, {formula});
+        }
+    }
+
+    update(data){
+        if(data.formula != undefined && data.formula != this.formula){
+            this.formula = data.formula;
+            this.dom.widget.formula.innerHTML = this.formula;
+            this.dom.formula.value = this.formula;
+        }
+
+        if(data.result != undefined && data.result != this.result){
+            this.result = data.result;
+            this.dom.widget.result.innerHTML = this.result;
+            this.dom.result.innerHTML = this.result;
+        }
+    }
+
+    delete(){
+        socket.emit('removeDice',this.id);
+    }
+
+    remove(){
+        objectSets.Dice.delete(this.id);
+        this.widget.hide();
+        this.dom.root.removeFromParent();
+    }
+
+    check(formula){
+        if(formula == undefined) formula = this.formula;
+        if(!formula) return new Error('dice formula is empty');
+
+        let match = formula.search(/[^\s\ddklh\+\-\*\/\^\(\)abs]/i);
+        if(match > 0) return new Error(`contains invalid character '${formula[match]}' at position ${match}`);
+
+        match = formula.match(/(\d*d\d+(k\d*(l|h)?)?|\+|\-|\*|\/|\^|\(|\)|\d|abs|\s)+/i);
+        if(!match) return new Error('invalid syntax');
+        if(match.index != 0) return new Error('invalid syntax at the beginning');
+        if(match[0].length != formula.length) return new Error(`invalid syntax anywhere starting from postion ${match[0]}: '${formula.slice(match[0].length)}'`);
+
+        let bracket = 0;
+        for(let x of formula){
+            if(x == '(') bracket++;
+            else if(x == ')') bracket--;
+            if(bracket < 0) return new Error('unbalanced brackets');
+        }
+        if(bracket != 0) return new Error('unbalanced brackets');
+
+        match = formula.search(/[\+\-\*\/\^]\s*[\+\-\*\/\^\)]/i);
+        if(match > 0) return new Error(`algebraic symbol at position ${match} is followed directly by another algebraic symbol or closing bracket`);
+
+        match = formula.search(/\(\s*[\+\*\/\^]/i);
+        if(match > 0) return new Error(`opening bracket at position ${match} is followed directly by algebraic symbol`);
+        match = formula.search(/\(\s*\)/i);
+        if(match > 0) return new Error(`empty brackets at position ${match}`);
+
+        match = formula.search(/\d*d\d+(k\d*(l|h)?)?\s*(\d*d\d+(k\d*(l|h)?)?|\(|abs)/i);
+        if(match > 0) return new Error(`dice specifier at position ${match} is not followed by algebraic symbol or closing bracket`);
+
+        match = formula.search(/\d\s*(abs|\()/i);
+        if(match > 0) return new Error(`number at position ${match} is followed by abs or opening bracket`);
+
+        match = formula.search(/abs\s*[^\s\(]/i);
+        if(match > 0) return new Error(`abs at position ${match} is not followed by an opening bracket`);
+
+        match = formula.matchAll(/(\d*)d\d+k(\d*)(l|h)?/ig);
+        for(let x of match){
+            let number = x[1] === '' ? 1 : parseInt(x[1]);
+            if(!number) return new Error(`dice specifier '${x[0]}' at position ${x.index} has invalid number of dice`);
+            let keep = x[2] === '' ? 1 : parseInt(x[2]);
+            if(!number) return new Error(`dice specifier '${x[0]}' at position ${x.index} has invalid number of dice to keep`);
+            if(keep > number) return new Error(`dice specifier '${x[0]}' at position ${x.index} has invalid number of dice to keep (more than overall number)`);
+        }
+
+        formula = formula.trim();
+        if(formula[0] == '+' || formula[0] == '/' || formula[0] == '*' || formula[0] == '^') return new Error('invalid syntax at the beginning');
+        let l = formula.length-1;
+        if(formula[l] == '+' || formula[l] == '-' || formula[l] == '/' || formula[l] == '*' || formula[l] == '^') return new Error('invalid syntax at the end');
+    }
+
+    setError(error, notWidget){
+        this.dom.widget.error.innerHTML = 'Error';
+        this.dom.error.innerHTML = 'Error: ' + error.message;
+        if(!notWidget) this.dom.widget.error.style.display = '';
+        this.dom.error.style.display = '';
+    }
+
+    resetError(){
+        this.dom.widget.error.style.display = 'none';
+        this.dom.error.style.display = 'none';
+    }
+
+    roll(){
+        let error = this.check();
+        if(error){
+            return this.setError(error);
+        }
+        else this.resetError();
+
+        let formula = this.formula.toLowerCase().replace(/\s/g,'').replace(/\^/g,'**').replace(/abs/g, 'Math.abs');
+        formula = formula.replace(/(\d*)d(\d+)(k(\d*)(l|h)?)?/ig, function(match, number, faces, keepSubMatch, keep, keepType){
+            number = parseInt(number);
+            if(!number) number = 1;
+            faces = parseInt(faces);
+            let rolls = [];
+            for(let i = 0; i < number; i++) rolls.push(Math.ceil(Math.random()*faces));
+            if(keepSubMatch){
+                keep = parseInt(keep);
+                if(!keep) keep = 1;
+                rolls.sort((a,b)=>a-b);
+                if(keepType == 'l') rolls = rolls.slice(0,keep);
+                else rolls = rolls.slice(-keep);
+            }
+            return Math.sum(...rolls);
+        });
+        try{
+            this.result = eval(formula);
+        }
+        catch(e){
+            return this.setError(new Error('Error during eval: '+e.message));
+        }
+        socket.emit('updateDice', this.id, {result: this.result});
+        this.dom.widget.root.style.width = (this.dom.widget.root.offsetWidth - 25) + 'px';
+        this.dom.widget.result.innerHTML = '';
+        this.dom.result.innerHTML = '';
+        setTimeout(()=>{
+            this.dom.widget.root.style.width = '';
+            this.dom.widget.result.innerHTML = this.result;
+            this.dom.result.innerHTML = this.result;
+        }, DICE_BLINK_DELAY);
+        return this.result;
+    }
+
+    async showDistribution(nEpisodes){
+        let error = this.check();
+        if(error){
+            return this.setError(error);
+        }
+        else this.resetError();
+
+        let plotlyPromise;
+        try{Plotly}
+        catch(e){
+            plotlyPromise = loadLibrary('modules/plotly.min.js');
+        }
+
+        if(!nEpisodes) nEpisodes = Dice.distrSampleSize;
+
+        let episodes = [];
+        for(let i=0;i<nEpisodes;i++) episodes.push([]);
+        let dice = 0;
+
+
+        let formula = this.formula.toLowerCase().replace(/\s/g,'').replace(/\^/g,'**').replace(/abs/g, 'Math.abs');
+        formula = formula.replace(/(\d*)d(\d+)(k(\d*)(l|h)?)?/ig, function(match, number, faces, keepSubMatch, keep, keepType){
+            number = parseInt(number);
+            if(!number) number = 1;
+            faces = parseInt(faces);
+            for(let episode of episodes){
+                let rolls = [];
+                for(let i = 0; i < number; i++) rolls.push(Math.ceil(Math.random()*faces));
+                episode.push(rolls);
+            }
+            if(keepSubMatch){
+                keep = parseInt(keep);
+                if(!keep) keep = 1;
+                for(let episode of episodes){
+                    episode[dice].sort((a,b)=>a-b);
+                    if(keepType == 'l') episode[dice] = episode[dice].slice(0,keep);
+                    else episode[dice] = episode[dice].slice(-keep);
+                }
+            }
+            for(let episode of episodes) episode[dice] = Math.sum(...episode[dice]);
+            return 'e['+(dice++)+']';
+        });
+
+        let results;
+        try{
+            results = eval('episodes.map(e=>' + formula + ')');
+        }
+        catch(e){
+            return this.setError(new Error('Error during eval: '+e.message), true);
+        }
+
+        if(plotlyPromise) await plotlyPromise;
+        popup.open([document.createNode('div',{id:'plotly',className:'add_popup_wrapper',onclick: e=>e.stopPropagation()})]);
+        Plotly.newPlot('plotly', [{
+            x: results,
+            type: 'histogram',
+            histnorm: 'probability',
+            marker: {
+                color: '#2ba2a2',
+            },
+            xbins: {
+                size: 1
+            }
+        }],{
+            font: {
+                color: localStorage.getItem('pnp_theme') == 'light' ? '#000' : '#ccc'
+            },
+            paper_bgcolor: 'transparent',
+            plot_bgcolor: 'transparent',
+            margin:{
+                l:40,
+                r:20,
+                t:10,
+                b:30
+            },
+            yaxis: {
+                tickformat: ',.1%'
+            },
+            autosize: true
+        });
+        return results;
+    }
+
+    static displayNotation(){
+        // https://en.wikipedia.org/wiki/Dice_notation
+        // AdX (or dX == 1dX) -> one dice entity; A ... number of dice, X ... number of faces
+        // expandable with AdXkYh (==AdXkY) or AdXkYl -> keep only highest/lowest Y dice (Y can be omitted -> assumed to be 1)
+        // algebraic formulas (^ or ** for exponantiation; abs(...) for absolute value) and static numbers, e.g. 2d6 + 3d4 + 12
+        popup.info(
+`In the following any captial letters inside of dice entities are placeholders for a positive, integer number.
+<ul>
+    <li>The foundation of any dice formula are dice entities of the form <code>AdX</code> (<i>A</i> being the number of dice and <i>X</i> being the number of faces), 
+    e.g. <code>2d6</code> are two usual 6-sided dice. (These dice do not have to be one of the common dice forms or even physically possible, e.g. <code>2d1000</code> is perfectly fine as a dice entity.)</li>
+    <li>You can omit the <i>A</i>, in which case it is assumed to be only 1 dice, e.g. <code>d8</code> rolls one 8-sided dice and is equivalent to <code>1d8</code>.</li>
+    <li>The numbers rolled will be summed up, which then gives the result of the respective dice entity, e.g. the dice entity <code>3d4</code> might on one roll produce the numbers 2, 2 and 3, 
+        which will lead to a final result of 7</li>
+    <li>This notation can be expanded to the form <code>AdXkYh</code> or <code>AdXkYl</code>, which will only keep the <i>Y</i> lowest/highest number of dice of a roll (l for lower/h for higher), 
+        e.g. <code>3d3k2l</code> might roll the numbers 2, 2 and 3 from which only 2 and 2 are kept and therefore results in 4</li>
+    <li>Given that a dice entity contains a k after <code>AdX</code>, i.e. it is at least of the form <code>AdXk</code>:<br>
+        If the <i>Y</i> is omitted it is assumed to be 1 (i.e. only the lowest or highest number will be considered).<br>
+        If the l or h in the end is omitted, an h is assumed (i.e. by the default the higher roll will be considered).<br>
+        E.g. <code>3d8k1h</code> &#x2259; <code>3d8kh</code> &#x2259; <code>3d8k1</code> &#x2259; <code>3d8k</code></li>
+    <li>A dice formula can contain multiple dice entities and combine them with usual algebraic operators (+, -, *, /, ^), brackets (by the default the standard order of operations will be used), 
+        static numbers and the absolute function (abs(...)). All these will be handled <i>after</i> the dice were rolled and summed up for each dice entity individually.<br>
+        E.g. <code>d6 + 3d8 * 5</code> will roll three 8-sided dice, multiply the sum of results with 5 and finally add the result of one 6-sided dice.</li>
+</ul>`, 
+'Dice notation syntax');
+    }
+}
+Dice.distrSampleSize = parseInt(localStorage.getItem('pnp_dice_distr_sample'));
+if(!Dice.distrSampleSize){
+    Dice.distrSampleSize = 10000;
+    localStorage.setItem('pnp_dice_distr_sample',10000);
+}
+
+var game = {
+    menuTabs: {
+        board: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Board',onclick: ()=>game.openTab('board')}),
+        dice: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Dice',onclick: ()=>game.openTab('dice')}),
+        widgets: document.createNode('div',{className:'secondary_menu_tab',innerHTML:'Widgets',onclick: ()=>game.openTab('widgets')})
+    },
+
+    dom: {},
+
+    currentOpenTab: 'board',
+
+    init(){
+        this.dom.dice = {};
+        this.dom.dice.root = document.createNode('div');
+        this.dom.dice.root.appendChild(document.createNode('div',_,{marginBottom:'10px'}))
+            .appendChild(document.createNode('a',{innerHTML:'Dice notation', onclick: ()=>Dice.displayNotation()}));
+        this.dom.dice.dice = this.dom.dice.root.appendChild(document.createNode('div',{className:'dice_wrapper'}));
+        this.dom.dice.root.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element',
+            onclick: e=>{
+                socket.emit('addDice');
+            }
+        }));
+
+        socket.on('addDice', (id, formula)=>{new Dice(id, formula)});
+
+        socket.on('serveDice', (dice)=>{
+            for(let x of dice) new Dice(x.id, x.formula, x.result);
+        });
+
+        socket.emit('requestDice');
+
+
+        this.raiseHand = false;
+
+        this.widgets = {};
+        this.widgets.raiseHand = {};
+        this.widgets.raiseHand.dom = {};
+        this.widgets.raiseHand.dom.root = document.createNode('div');
+        this.widgets.raiseHand.dom.button = this.widgets.raiseHand.dom.root.appendChild(document.createNode('div', {
+            className: 'button_wrapper',
+            onclick: ()=>this.toggleRaiseHand()
+        }));
+        this.widgets.raiseHand.dom.button.appendChild(document.createNode('img', {src: 'icons/hand.png'}));
+        this.widgets.raiseHand.widget = new Widget(this.widgets.raiseHand.dom.root);
+        this.widgets.raiseHand.widget.onclose = ()=>{
+            this.dom.widgets.raiseHand.widgetize.style.display = '';
+        };
+
+
+        this.dom.widgets = {};
+        this.dom.widgets.root = document.createNode('div');
+
+        this.dom.widgets.raiseHand = {};
+        this.dom.widgets.raiseHand.root = this.dom.widgets.root.appendChild(document.createNode('div', {className:'content_section settings_section'}));
+        this.dom.widgets.raiseHand.widgetize = this.dom.widgets.raiseHand.root.appendChild(document.createNode('div', {
+            className:'widgetize_icon', 
+            onclick: ()=>{
+                this.dom.widgets.raiseHand.widgetize.style.display = 'none';
+                this.widgets.raiseHand.widget.show();
+            }
+        }));
+        this.dom.widgets.raiseHand.widgetize.appendChild(document.createNode('img', {className:'icon', src:'icons/widgetize.png'}));
+        this.dom.widgets.raiseHand.root.appendChild(document.createNode('h2', {innerHTML:'Raise your hand'}));
+        this.dom.widgets.raiseHand.button = this.dom.widgets.raiseHand.root.appendChild(document.createNode('div', {
+            className: 'button_wrapper',
+            onclick: ()=>this.toggleRaiseHand()
+        }));
+        this.dom.widgets.raiseHand.button.appendChild(document.createNode('img', {src: 'icons/hand.png'}));
+        this.dom.widgets.raiseHand.unavailable = this.dom.widgets.raiseHand.root.appendChild(document.createNode('div', {
+            innerHTML: 
+`This device is not yet associated with a discord user. To initialize this device follow these steps:
+<ol>
+<li>open Discord and navigate to the P&P server</li>
+<li>once on the server navigate to the text channel named <code>bot</code></li>
+<li>inside this channel type the message <code>?init</code> and send it</li>
+<li>shortly after the discord bot should reply with your initialization link</li>
+<li>open that link on this device</li>
+<li>you are all done</li>
+</ol>
+(If this message does not dissappear after you followed the above steps, it is most likely not your fault. Just hit me up and I will fix it)`
+        }));
+
+        if(discordUser){
+            this.dom.widgets.raiseHand.widgetize.style.display = '';
+            this.dom.widgets.raiseHand.button.style.display = '';
+            this.dom.widgets.raiseHand.unavailable.style.display = 'none';
+        }
+        else{
+            this.dom.widgets.raiseHand.widgetize.style.display = 'none';
+            this.dom.widgets.raiseHand.button.style.display = 'none';
+            this.dom.widgets.raiseHand.unavailable.style.display = '';
+        }
+
+
+        this.raisedHands = new Map();
+        
+        this.widgets.raisedHands = {};
+        this.widgets.raisedHands.dom = {};
+        this.widgets.raisedHands.dom.root = document.createNode('div');
+        this.widgets.raisedHands.dom.root.appendChild(document.createNode('b', {innerHTML:'Raised hands:'}));
+        this.widgets.raisedHands.dom.list = this.widgets.raisedHands.dom.root.appendChild(document.createNode('div', {}));
+        this.widgets.raisedHands.widget = new Widget(this.widgets.raisedHands.dom.root);
+        this.widgets.raisedHands.widget.onclose = ()=>{
+            this.dom.widgets.raisedHands.widgetize.style.display = '';
+        };
+
+        this.dom.widgets.raisedHands = {};
+        this.dom.widgets.raisedHands.root = this.dom.widgets.root.appendChild(document.createNode('div', {className:'content_section settings_section'}));
+        this.dom.widgets.raisedHands.widgetize = this.dom.widgets.raisedHands.root.appendChild(document.createNode('div', {
+            className:'widgetize_icon', 
+            onclick: ()=>{
+                this.dom.widgets.raisedHands.widgetize.style.display = 'none';
+                this.widgets.raisedHands.widget.show();
+            }
+        }));
+        this.dom.widgets.raisedHands.widgetize.appendChild(document.createNode('img', {className:'icon', src:'icons/widgetize.png'}));
+        this.dom.widgets.raisedHands.root.appendChild(document.createNode('h2', {innerHTML:'Raised hands'}));
+        this.dom.widgets.raisedHands.list = this.dom.widgets.raisedHands.root.appendChild(document.createNode('div'));
+
+        socket.on('raiseHand', (id, username)=>this.addRaisedHand(id,username));
+        socket.on('unraiseHand', (id)=>this.removeRaisedHand(id));
+        socket.on('serveRaisedHands', (raisedHands)=>{
+            for(let x of raisedHands){
+                if(discordUser && discordUser._id == x[0]) this.toggleRaiseHand(true, true);
+                this.addRaisedHand(x[0],x[1]);
+            }
+        });
+
+        socket.emit('requestRaisedHands');
+
+        this.loaded = true;
+    },
+
+    addRaisedHand(id, username){
+        let raisedHand = this.raisedHands.get(id);
+        if(raisedHand){
+            raisedHand.dom.removeFromParent();
+            raisedHand.widgetDom.removeFromParent();
+        }
+
+        let dom = this.dom.widgets.raisedHands.list.appendChild(document.createNode('div', {innerHTML: username}));
+        dom.appendChild(document.createNode('div', {innerHTML:'x',className:'unraise_hand_icon',onclick:()=>{
+            socket.emit('unraiseHand', id);
+        }}));
+        let widgetDom = this.widgets.raisedHands.dom.list.appendChild(document.createNode('div', {innerHTML: username}));
+        widgetDom.appendChild(document.createNode('div', {innerHTML:'x',className:'unraise_hand_icon',onclick:()=>{
+            socket.emit('unraiseHand', id);
+        }}));
+        if(discordUser && discordUser._id == id) this.toggleRaiseHand(true, true);
+
+        this.raisedHands.set(id,{dom, widgetDom, username});
+    },
+
+    removeRaisedHand(id){
+        let raisedHand = this.raisedHands.get(id);
+        if(!raisedHand) return;
+
+        raisedHand.dom.removeFromParent();
+        raisedHand.widgetDom.removeFromParent();
+        if(discordUser && discordUser._id == id) this.toggleRaiseHand(false, true);
+
+        this.raisedHands.delete(id);
+    },
+
+    toggleRaiseHand(value, noTransmit){
+        if(value == this.raiseHand) return;
+        this.raiseHand = !this.raiseHand;
+        if(this.raiseHand){
+            this.dom.widgets.raiseHand.button.classList.add('active_button_wrapper');
+            this.widgets.raiseHand.dom.button.classList.add('active_button_wrapper');
+            if(!noTransmit) socket.emit('raiseHand', discordUser._id);
+        }
+        else{
+            this.dom.widgets.raiseHand.button.classList.remove('active_button_wrapper');
+            this.widgets.raiseHand.dom.button.classList.remove('active_button_wrapper');
+            if(!noTransmit) socket.emit('unraiseHand', discordUser._id);
+        }
+    },
+
+    updateDiscordUser(){
+        if(!this.loaded) return;
+        this.dom.widgets.raiseHand.widgetize.style.display = '';
+        this.dom.widgets.raiseHand.button.style.display = '';
+        this.dom.widgets.raiseHand.unavailable.style.display = 'none';
+        if(Array.from(this.raisedHands.keys()).includes(discordUser._id)) this.toggleRaiseHand(true, true);
+    },
+
+    openTab(tab){
+        if(tab == undefined){
+            let activePrimaries = document.getElementsByClassName('primary_menu_active');
+            for(let x of activePrimaries) x.classList?.remove('primary_menu_active');
+            DOMCache.menuEntries.game.classList?.add('primary_menu_active');
+
+            DOMCache.menus.secondary.innerHTML = '';
+            DOMCache.menus.secondary.appendChild(this.menuTabs.board);
+            DOMCache.menus.secondary.appendChild(this.menuTabs.dice);
+            DOMCache.menus.secondary.appendChild(this.menuTabs.widgets);
+            DOMCache.menus.secondary.style.display = '';
+
+            DOMCache.menus.tertiary.style.display = 'none';
+
+            return this.openTab(this.currentOpenTab);
+        }
+
+        this.currentOpenTab = tab;
+        let activeSecondaries = document.getElementsByClassName('secondary_menu_active');
+        for(let x of activeSecondaries) x.classList?.remove('secondary_menu_active');
+        this.menuTabs[tab].classList?.add('secondary_menu_active');
+
+        DOMCache.mainContent.innerHTML = '';
+        if(tab == 'board'){
+            DOMCache.widgets.classList.remove('widgets_edit');
+        }
+
+        else if(tab == 'dice'){
+            DOMCache.widgets.classList.remove('widgets_edit');
+            DOMCache.mainContent.appendChild(this.dom.dice.root);
+        }
+
+        else if(tab == 'widgets'){
+            DOMCache.mainContent.appendChild(this.dom.widgets.root);
+            DOMCache.widgets.classList.add('widgets_edit');
+        }
+    }
+};
 
 class CircleDefinitionError extends Error{
     constructor(definitionStack, message){
@@ -1039,8 +2027,7 @@ class Storyline {
         this.currentOpenTab = 'general'; // general or id of StorylineInfoType
         this.currentOpenPlayer; // id of currently open player entity
 
-        this.gmValidated = false;
-        // TODO: check for GM validation in localStorage
+        this.gmValidated = gmValidatedStorylines.includes(this.id);
 
         this.dom = {};
         this.dom.generalInfo = document.createNode('div');
@@ -1157,6 +2144,14 @@ class Storyline {
         return this;
     }
 
+    validateGM(password){
+        if(!this.gmPassword) return false;
+        if(this.gmPassword != password) return false;
+        this.gmValidated = true;
+        gmValidatedStorylines.push(this.id);
+        localStorage.setItem('pnp_storylines_validated_gm',gmValidatedStorylines.join(','));
+    }
+
     async update(data){
         if(this.editing){
             function recursiveUpdateDataCash(cash, newData){
@@ -1219,7 +2214,7 @@ class Storyline {
             }
             this.dom.menuTabs.players.innerHTML = '';
             let players = this.getPlayerEntities();
-            for(let player of players) this.dom.menuTabs.players.appendChild(player.dom.menuTab);
+            for(let player of players) this.dom.menuTabs.players.appendChild(player.dom.menuTab.root);
             if(this.currentOpenPlayer && !players.includes(this.currentOpenPlayer)){
                 this.currentOpenPlayer = this.players.entities[0];
                 if(openPrimaryTab == 'players') this.openPlayer();
@@ -1482,13 +2477,13 @@ class Entity { // abstract
             className: 'edit_icon', 
             onclick: ()=>this.edit()
         }));
-        this.dom.icons.edit.appendChild(document.createNode('img', {className: 'icon', src:'icons/pencil-2.png'}));
+        this.dom.icons.edit.appendChild(document.createNode('img', {className: 'icon', src:'icons/edit.png'}));
 
         this.dom.icons.delete = this.dom.root.appendChild(document.createNode('div', {
             className: 'delete_icon', 
             onclick: ()=>this.delete()
         }, {display:'none'}));
-        this.dom.icons.delete.appendChild(document.createNode('img', {className: 'icon', src:'icons/bin-2.png'}));
+        this.dom.icons.delete.appendChild(document.createNode('img', {className: 'icon', src:'icons/bin.png'}));
         
 
         this.dom.title = this.dom.root.appendChild(document.createNode('h3', {onclick: ()=>this.toggleOpen()}));
@@ -1505,7 +2500,7 @@ class Entity { // abstract
         this.dom.description = this.dom.grid.appendChild(document.createNode('div'));
         this.dom.locationsLabel = this.dom.grid.appendChild(document.createNode('div', {innerHTML: 'Locations:'},{display:'none'}));
         this.dom.locations = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
-        this.dom.locationsIcon = this.dom.locations.appendChild(document.createNode('img', {className: 'icon map_icon', src:'icons/maps-pin.png'}));
+        this.dom.locationsIcon = this.dom.locations.appendChild(document.createNode('img', {className: 'icon map_icon', src:'icons/map_with_pin.png'}));
         this.dom.imageEditLabel = this.dom.grid.appendChild(document.createNode('div',{innerHTML:'Images:'},{display:'none'}));
         this.dom.imageEdit = this.dom.grid.appendChild(document.createNode('div',_,{display:'none'}));
         this.dom.imageEditSection = this.dom.imageEdit.appendChild(document.createNode('div'));
@@ -1518,6 +2513,18 @@ class Entity { // abstract
                 $this.dom.imageEditSection.appendChild($this.createEditImage(imgId));
             }
         }}));
+        if(this.storyline.gmValidated){
+            this.dom.protectedLabel = this.dom.grid.appendChild(document.createNode('div', {innerHTML: 'Read protected:'}, {display:'none'}));
+            this.dom.protected = this.dom.grid.appendChild(document.createNode('div')).appendChild(document.createNode('input',{
+                type: 'checkbox'
+            }, {display:'none'}));
+
+            this.dom.writingProtectedLabel = this.dom.grid.appendChild(document.createNode('div', {innerHTML: 'Write protected:'}, {display:'none'}));
+            this.dom.writingProtected = this.dom.grid.appendChild(document.createNode('div')).appendChild(document.createNode('input',{
+                type: 'checkbox'
+            }, {display:'none'}));
+        }
+        
 
         this.sortables = {};
         this.sortables.editImages = new Sortable.default([this.dom.imageEditSection], {
@@ -1596,11 +2603,13 @@ class Entity { // abstract
 
         if(data.protected!=undefined && this.protected != data.protected){
             this.protected = data.protected;
+            if(this.dom.protected) this.dom.protected.checked = this.protected;
             this.dom.root.style.display = (this.protected && !this.storyline.gmValidated) ? 'none' : '';
         }
 
         if(data.writingProtected!=undefined && this.writingProtected != data.writingProtected){
             this.writingProtected = data.writingProtected;
+            if(this.dom.writingProtected) this.dom.writingProtected.checked = this.writingProtected;
         }
 
         if(data.name!=undefined && this.name != data.name){
@@ -1667,6 +2676,11 @@ class Entity { // abstract
         this.dom.imageEditLabel.style.display = 'none';
         this.dom.imageEdit.style.display = 'none';
 
+        if(this.dom.protectedLabel) this.dom.protectedLabel.style.display = 'none';
+        if(this.dom.protected) this.dom.protected.style.display = 'none';
+        if(this.dom.writingProtectedLabel) this.dom.writingProtectedLabel.style.display = 'none';
+        if(this.dom.writingProtected) this.dom.writingProtected.style.display = 'none';
+
         if(this.images?.[0] != undefined){
             this.dom.firstImage.style.display = '';
             this.dom.gallery.style.display = this.images.length > 1 ? '' : 'none';
@@ -1719,7 +2733,7 @@ class Entity { // abstract
     }
 
     edit(){
-        if((this.storyline.writingProtected || this.writingProtected) && !this.gmValidated) return false;
+        if((this.storyline.writingProtected || this.writingProtected) && !this.storyline.gmValidated) return false;
 
         this.foldable = true;
         this.setEditing(true);
@@ -1748,6 +2762,11 @@ class Entity { // abstract
         this.dom.locations.style.display = '';
         this.dom.imageEditLabel.style.display = '';
         this.dom.imageEdit.style.display = '';
+
+        if(this.dom.protectedLabel) this.dom.protectedLabel.style.display = '';
+        if(this.dom.protected) this.dom.protected.style.display = '';
+        if(this.dom.writingProtectedLabel) this.dom.writingProtectedLabel.style.display = '';
+        if(this.dom.writingProtected) this.dom.writingProtected.style.display = '';
 
         this.dom.icons.draggable.style.display = 'none';
         this.dom.icons.edit.style.display = 'none';
@@ -1933,11 +2952,12 @@ class PlayerEntity extends Entity {
         this.dom.visibilitySetting.iconWrapper = document.createNode('div');
         this.dom.visibilitySetting.icon = this.dom.visibilitySetting.iconWrapper.appendChild(document.createNode('img',{
             className: 'icon', 
-            src: this.visible?'icons/view.png':'icons/view-off.png',
+            src: this.visible?'icons/view-on.png':'icons/view-off.png',
             onclick: ()=>this.toggleVisible()
         }));
 
-        this.dom.menuTab = document.createNode('div', {
+        this.dom.menuTab = {};
+        this.dom.menuTab.root = document.createNode('div', {
             className:'secondary_menu_tab',
             onclick: ()=>this.storyline.openPlayer(this.id),
             oncontextmenu: e=>{
@@ -1950,6 +2970,9 @@ class PlayerEntity extends Entity {
         },{
             display: this.visible ? '' : 'none'
         });
+        this.dom.menuTab.firstName = this.dom.menuTab.root.appendChild(document.createNode('span'));
+        this.dom.menuTab.lastName = this.dom.menuTab.root.appendChild(document.createNode('span', {className:'last_name'}));
+
         this.dom.menuTabs = {};
         this.dom.menuTabs.info = document.createNode('div', {innerHTML:'Info', onclick: ()=>this.openTab('info')});
         this.dom.menuTabs.cells = document.createNode('div', {innerHTML:'Values', onclick: ()=>this.openTab('cells')});
@@ -2144,8 +3167,8 @@ class PlayerEntity extends Entity {
     toggleVisible(value){
         if(this.visible == value) return;
         this.visible = !this.visible;
-        this.dom.menuTab.style.display = this.visible ? '' : 'none';
-        this.dom.visibilitySetting.icon.src = this.visible?'icons/view.png':'icons/view-off.png';
+        this.dom.menuTab.root.style.display = this.visible ? '' : 'none';
+        this.dom.visibilitySetting.icon.src = this.visible?'icons/view-on.png':'icons/view-off.png';
         if(this.visible) hiddenPlayers.delete(this.id);
         else hiddenPlayers.add(this.id);
         localStorage.setItem('pnp_hidden_players',Array.from(hiddenPlayers).join(','));
@@ -2192,7 +3215,9 @@ class PlayerEntity extends Entity {
         await super.update(data);
         
         if(changedName){
-            this.dom.menuTab.innerHTML = this.name;
+            this.dom.menuTab.firstName.innerHTML = this.name.split(' ')[0];
+            let lastName = this.name.split(' ').slice(1).join(' ');
+            this.dom.menuTab.lastName.innerHTML = lastName ? ' '+lastName : '';
             this.dom.visibilitySetting.name.innerHTML = this.name;
             $[this.referenceName] = this;
         }
@@ -2269,11 +3294,19 @@ class PlayerEntity extends Entity {
 
         if(data.cells?.entities && !this.cells?.entities?.equals(data.cells.entities)){
             this.cells.entities = data.cells.entities;
-            for(let id of this.cells.entities){
-                if(!objectSets.CellEntity.get(id)) newObjectInits.push((new CellEntity(id, this, this.storyline, this)).init());
-            }
             this.dom.cells.entities.innerHTML = '';
-            for(let entity of this.getEntities('cells')) this.dom.cells.entities.appendChild(entity.dom.root);
+            for(let id of this.cells.entities){
+                if(id == 'br'){
+                    this.dom.cells.entities.appendChild(document.createNode('div',{className:'cell_br'}));
+                }
+                else if (id == 'hr'){
+                    this.dom.cells.entities.appendChild(document.createNode('div',{className:'cell_hr'}));
+                }
+                else{
+                    if(!objectSets.CellEntity.get(id)) newObjectInits.push((new CellEntity(id, this, this.storyline, this)).init());
+                    this.dom.cells.entities.appendChild(objectSets.CellEntity.get(id).dom.root);
+                }
+            }
         }
         if(data.cells?.categories && !this.cells?.categories?.equals(data.cells.categories)){
             this.cells.categories = data.cells.categories;
@@ -2302,7 +3335,7 @@ class PlayerEntity extends Entity {
 
             let activeSecondaries = document.getElementsByClassName('secondary_menu_active');
             for(let x of activeSecondaries) x.classList?.remove('secondary_menu_active');
-            this.dom.menuTab.classList?.add('secondary_menu_active');
+            this.dom.menuTab.root.classList?.add('secondary_menu_active');
 
             return this.openTab(this.currentOpenTab);
         }
@@ -2345,7 +3378,10 @@ class PlayerEntity extends Entity {
             case 'itemEffects': return this[property].entities.map(id => objectSets.ItemEffectEntity.get(id));
             case 'skills': return this[property].entities.map(id => objectSets.SkillEntity.get(id));
             case 'notes': return this[property].entities.map(id => objectSets.NoteEntity.get(id));
-            case 'cells': return this[property].entities.map(id => objectSets.CellEntity.get(id));
+            case 'cells': return this.cells.entities.reduce((res, curr)=>{
+                if(curr != 'br' && curr != 'hr') res.push(objectSets.CellEntity.get(curr));
+                return res;
+            }, []);
         }
     }
 
@@ -3110,6 +4146,8 @@ class CellEntity extends Entity {
         this.dependencies = [];
         this.value = 0;
 
+        this.lifeBarWidgets = new Map();
+
         this.eventListeners.outbound = new Set();
 
         this.dom.root.classList.add('entity_compact');
@@ -3120,7 +4158,7 @@ class CellEntity extends Entity {
         this.dom.titleValue = this.dom.title.appendChild(document.createNode('div',{className: 'cell_title_value'}));
 
         this.dom.errorLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML: 'Error:'}), this.dom.descriptionLabel);
-        this.dom.error = this.dom.grid.insertBefore(document.createNode('div',_,{color:'red'}), this.dom.descriptionLabel);
+        this.dom.error = this.dom.grid.insertBefore(document.createNode('div',{className:'error'},{color:'red'}), this.dom.descriptionLabel);
 
         this.resetError();
     }
@@ -3132,6 +4170,24 @@ class CellEntity extends Entity {
         await this.update(data, true);
         if(loadingResolves.CellEntity.get(this.id)) for(let x of loadingResolves.CellEntity.get(this.id)) x(this);
         return this;
+    }
+
+    widgetize(){
+        if(this.cellType = 'static') return;
+        if(this.widget) return this.widget.widget.show();
+        this.widget = {};
+        // TODO
+    }
+
+    widgetizeLifeBar(secondCell){
+        if(this.cellType != 'control_number' && this.cellType != 'constant' && this.cellType != 'dynamic') return;
+        if(secondCell.cellType != 'control_number' && secondCell.cellType != 'constant' && secondCell.cellType != 'dynamic') return;
+        if(this.lifeBarWidgets.get(secondCell.id)) return this.lifeBarWidgets.get(secondCell.id).widget.show();
+        let widget = {};
+        this.lifeBarWidgets.set(secondCell.id, widget);
+        secondCell.lifeBarWidgets.set(this.id, widget);
+        
+        
     }
 
     async parseFunction(functionString, retry=0){
@@ -3644,13 +4700,13 @@ class Category {
             className: 'edit_icon', 
             onclick: ()=>this.edit()
         }));
-        this.dom.icons.edit.appendChild(document.createNode('img', {className: 'icon', src:'icons/pencil-2.png'}));
+        this.dom.icons.edit.appendChild(document.createNode('img', {className: 'icon', src:'icons/edit.png'}));
 
         this.dom.icons.delete = this.dom.head.appendChild(document.createNode('div', {
             className: 'delete_icon', 
             onclick: ()=>this.delete()
         }, {display:'none'}));
-        this.dom.icons.delete.appendChild(document.createNode('img', {className: 'icon', src:'icons/bin-2.png'}));
+        this.dom.icons.delete.appendChild(document.createNode('img', {className: 'icon', src:'icons/bin.png'}));
 
         this.dom.head.appendChild(document.createNode('div',{innerHTML:'+', className:'add_element add_element_category', onclick: e=>{
             let fields = [];
@@ -3762,6 +4818,11 @@ class Category {
             this.dom.name.innerHTML = this.name;
         }
 
+        if(data.protected!=undefined && this.protected != data.protected){
+            this.protected = data.protected;
+            this.dom.root.style.display = (this.protected && !this.storyline.gmValidated) ? 'none' : '';
+        }
+
         let newObjectInits = [];
 
         if(data.entities!=undefined && !this.entities?.equals(data.entities)){
@@ -3798,7 +4859,7 @@ class Category {
     }
 
     edit(){
-        if((this.storyline.writingProtected || this.writingProtected) && !this.gmValidated) return false;
+        if((this.storyline.writingProtected || this.writingProtected) && !this.storyline.gmValidated) return false;
 
         this.setEditing(true);
         currentlyEditing?.cancelEdit();
@@ -4329,6 +5390,8 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
         if(exitEditBehaviour != 'stay' && currentlyEditing) currentlyEditing[exitEditBehaviour]();
     }
 
+    DOMCache.widgets.style.display = globalShowWidgets ? '' : 'none';
+
     await loadPromises.storylines.loaded;
     let storylineId = parseInt(localStorage.getItem('pnp_storyline'));
     if(!storylineSelectionOptions.get(storylineId)){
@@ -4339,29 +5402,62 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
     currentStoryline.openTab();
 
     settings.init();
+    music.init();
+    game.init();
 
     DOMCache.menuEntries.storyline.onclick = () =>{
+        if(!globalShowWidgets) DOMCache.widgets.style.display = 'none';
+        DOMCache.widgets.classList.remove('widgets_edit');
         openPrimaryTab = 'storyline';
         currentStoryline.openTab();
     };
     DOMCache.menuEntries.players.onclick = () =>{
+        if(!globalShowWidgets) DOMCache.widgets.style.display = 'none';
+        DOMCache.widgets.classList.remove('widgets_edit');
         openPrimaryTab = 'players';
         currentStoryline.openPlayer();
     };
     DOMCache.menuEntries.settings.onclick = () => {
+        if(!globalShowWidgets) DOMCache.widgets.style.display = 'none';
+        DOMCache.widgets.classList.remove('widgets_edit');
         openPrimaryTab = 'settings';
         settings.openTab();
-    }
+    };
+    DOMCache.menuEntries.music.onclick = () => {
+        if(!globalShowWidgets) DOMCache.widgets.style.display = 'none';
+        DOMCache.widgets.classList.remove('widgets_edit');
+        openPrimaryTab = 'music';
+        music.openTab();
+    };
+    DOMCache.menuEntries.game.onclick = () => {
+        DOMCache.widgets.style.display = '';
+        openPrimaryTab = 'game';
+        game.openTab();
+    };
 
     if(getParameters.init){
         settings.openTab();
         settings.openTab('notifications');
     }
 
+    if(getParameters.pwa) popup.pwaInfo();
+    else if(getParameters.pwainstall) popup.pwaInstall();
+
     DOMCache.overlays.loading.style.display = 'none';
 })();
 
 /* TODO/NOTES:
+- life bars updating on value change
+- controls not updating via sockets (and button signal also not sent)
+- hr and br system break sortable (and maybe more!!)
+- rewrite music server for multiple queues (some code broken; see local TODO)
+- widgets:
+    - saving
+    - cell widgets
+    - health bar widget
+- dice notation explanation
+- value syntax explanation
+- pwa install explanation
 - value system:
     - handling br/hr entries (both empty divs with border or no border)
     - compact mode on/off (toggling icon in filter bar)
@@ -4371,13 +5467,9 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
         - every br gets dashed border and some padding (enables clicking) -> turns into hr
         - hr on click removes it
 - transfering items
-- settings: 
-    - see local TODO
-    - storyline
-- dice
 - music
 - migrating old data
-- board
+- board system
 - map system
 
 
@@ -4385,12 +5477,14 @@ ISSUES:
 - creating new player from template -> not copying effect mappings correctly
 - Push notifications (old tokens etc.) -> use unique device id and check every at start up
 - deleting does not delete from $ set (can't use delete method, since it's only triggering -> need to use update method)
+- rechecking and dependency reevaluation of cell functions necessary after deletion or renaming of items/skills/effects/cells/players
 - inefficiency of loading faulty cells (with undefined references) -> use loading promises or similar instead of just waiting with timeout
+- service worker is not caching (cache always empty)
 
 PLANS:
 
 - copyright wall (with password one time entered -> saved as cookie (note that password is provided on discord in welcome channel))
-
+- sync settings for discord user across devices (if turned on)
 - Undo/Redo (only for own changes (but also sabe also before if it is not equivalent to last step) and only for changed parameters, but always safe last state before going back in protocol 
   to enable complete redo, even if the last step originated in a change from outside)
     - undo/redo via Ctrl+Z/Y or in Settings displaying whole protocol (and control protocol length)
@@ -4410,11 +5504,13 @@ PLANS:
 - noisli-like ambience noise feature in addition to music
 
 - Board:
+    - more instances
     - grid types: no grid, rectangle, hexagon (save entity positions with float, only snap to grid when moving or via button)
     - enter moving radius to display it on grid (only when grid is active)
     - save backgrounds and entities -> easy menu to load them
     - menu to draw entities or load images for them and cut them out
 
+Spotify: look at open-source downloader
 
 Epidimicsound search "API" (not public! prob is going to change in future!):
     Request: 
