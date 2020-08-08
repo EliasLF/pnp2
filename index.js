@@ -1570,6 +1570,10 @@ io.on('connection', async (socket) => {
             }
         });
 
+
+        socket.on('buttonPressed', function(id){
+            socket.broadcast.emit('buttonPressed_'+id);
+        });
         
 
         socket.on('updateData', async function(collection, id, data){

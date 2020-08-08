@@ -4174,20 +4174,18 @@ class CellEntity extends Entity {
 
     widgetize(){
         if(this.cellType = 'static') return;
-        if(this.widget) return this.widget.widget.show();
-        this.widget = {};
+        if(this.widget) return this.widget.show();
         // TODO
     }
 
     widgetizeLifeBar(secondCell){
         if(this.cellType != 'control_number' && this.cellType != 'constant' && this.cellType != 'dynamic') return;
         if(secondCell.cellType != 'control_number' && secondCell.cellType != 'constant' && secondCell.cellType != 'dynamic') return;
-        if(this.lifeBarWidgets.get(secondCell.id)) return this.lifeBarWidgets.get(secondCell.id).widget.show();
-        let widget = {};
+        if(this.lifeBarWidgets.get(secondCell.id)) return this.lifeBarWidgets.get(secondCell.id).show();
+        let widget = new LifeBarWidget(this, secondCell);
         this.lifeBarWidgets.set(secondCell.id, widget);
         secondCell.lifeBarWidgets.set(this.id, widget);
-        
-        
+        widget.show();
     }
 
     async parseFunction(functionString, retry=0){
@@ -4235,6 +4233,13 @@ class CellEntity extends Entity {
         if(changedName){
             if(this.cellType == 'control_button') this.dom.value.innerHTML = this.name;
             this.player.cell[this.referenceName] = this;
+        }
+
+        let changed = false;
+
+        if(data.savedValue != undefined && this.savedValue != data.savedValue){
+            this.savedValue = data.savedValue;
+            changed = true;
         }
 
         if(this.cellType == undefined && data.cellType != undefined){
@@ -4300,7 +4305,7 @@ class CellEntity extends Entity {
                         onclick: e=>e.stopPropagation(),
                         type: 'number',
                         step: 'any',
-                        value: 0,
+                        value: this.savedValue,
                         onchange: ()=>{
                             let value = parseFloat(this.dom.value.value);
                             if(Number.isNaN(value)){
@@ -4321,6 +4326,7 @@ class CellEntity extends Entity {
                     this.dom.titleValue.appendChild(document.createTextNode(': '));
                     this.dom.value = this.dom.titleValue.appendChild(document.createNode('input',{
                         onclick: e=>e.stopPropagation(),
+                        value: this.savedValue,
                         onchange: ()=>{
                             let value = this.dom.value.value;
                             if(value != this.savedValue){
@@ -4340,12 +4346,20 @@ class CellEntity extends Entity {
                         innerHTML: this.name,
                         onclick: e=>{
                             e.stopPropagation();
+                            socket.emit('buttonPressed', this.id);
                             this.value = true;
                             this.fireChangeEvent();
                             this.value = false;
                             this.fireChangeEvent();
                         }
                     }));
+
+                    socket.on('buttonPressed_'+this.id, ()=>{
+                        this.value = true;
+                        this.fireChangeEvent();
+                        this.value = false;
+                        this.fireChangeEvent();
+                    });
                     break;
                 
                 case 'control_checkbox':
@@ -4353,6 +4367,7 @@ class CellEntity extends Entity {
                     this.dom.value = this.dom.titleValue.appendChild(document.createNode('input',{
                         onclick: e=>e.stopPropagation(),
                         type: 'checkbox',
+                        checked: this.savedValue,
                         onchange: ()=>{
                             let value = this.dom.value.checked;
                             if(value != this.savedValue){
@@ -4389,15 +4404,8 @@ class CellEntity extends Entity {
             }
         }
 
-        let changed = false;
-
         if(data.offsetAbsolute != undefined && this.offsetAbsolute != data.offsetAbsolute){
             this.offsetAbsolute = data.offsetAbsolute;
-            changed = true;
-        }
-
-        if(data.savedValue != undefined && this.savedValue != data.savedValue){
-            this.savedValue = data.savedValue;
             changed = true;
         }
 
@@ -4410,6 +4418,11 @@ class CellEntity extends Entity {
                 this.dom.value.innerHTML = '';
                 let options = this.valueFunction.split('\n');
                 for(let i in options) this.dom.value.appendChild(document.createNode('option',{innerHTML:options[i],value:i}));
+                this.dom.value.value = this.savedValue;
+                if(this.dom.value.value == ''){
+                    this.dom.value.value = 0;
+                    this.dom.value.onchange();
+                }
             }
             else changedDependencies = true;
             changed = true;
@@ -4594,6 +4607,8 @@ class CellEntity extends Entity {
             }
             this.dom.value.innerHTML = this.value.toFixedMin(2);
         }
+
+        for(let x of this.lifeBarWidgets.values()) x.update();
         
         if(CELL_DEBUG) console.log(this.name, ', call super: ', Array.from(this.eventListeners.inbound.values()).map(x => x.name));
         if(!this.error) super.computeValue();
@@ -5447,15 +5462,12 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
 })();
 
 /* TODO/NOTES:
-- life bars updating on value change
-- controls not updating via sockets (and button signal also not sent)
 - hr and br system break sortable (and maybe more!!)
 - rewrite music server for multiple queues (some code broken; see local TODO)
 - widgets:
     - saving
     - cell widgets
     - health bar widget
-- dice notation explanation
 - value syntax explanation
 - pwa install explanation
 - value system:
