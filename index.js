@@ -4,6 +4,8 @@
     loading stream via soundcloud api: line 91
 */
 
+const _ = undefined;
+
 var config = require('./config.json');
 
 if(config.https){
@@ -86,7 +88,6 @@ mysql.safeConnect = function(connectionConfig) {
 mysql.safeConnect(config.mysql);
 
 
-const _ = undefined;
 
 // these methods are not complete!!! they just cover hex entities
 String.prototype.encodeHTML = function(){
@@ -182,32 +183,59 @@ function getReferenceName(name){
 }
 
 
-const ISO8601 = {
-    parseDuration: function (iso8601Duration) {
+const Duration = {
+    parseISO8601: function (iso8601Duration) { // returns seconds
         var matches = iso8601Duration.match(/(-)?P(?:([.,\d]+)Y)?(?:([.,\d]+)M)?(?:([.,\d]+)W)?(?:([.,\d]+)D)?(?:T(?:([.,\d]+)H)?(?:([.,\d]+)M)?(?:([.,\d]+)S)?)?/);
     
-        return {
-            sign: matches[1] === undefined ? '+' : '-',
-            years: matches[2] === undefined ? 0 : parseFloat(matches[2]),
-            months: matches[3] === undefined ? 0 : parseFloat(matches[3]),
-            weeks: matches[4] === undefined ? 0 : parseFloat(matches[4]),
-            days: matches[5] === undefined ? 0 : parseFloat(matches[5]),
-            hours: matches[6] === undefined ? 0 : parseFloat(matches[6]),
-            minutes: matches[7] === undefined ? 0 : parseFloat(matches[7]),
-            seconds: matches[8] === undefined ? 0 : parseFloat(matches[8])
-        };
+        return ((matches[1] === undefined)?1:-1)*(
+            (matches[8] === undefined ? 0 : parseFloat(matches[8])) + 
+            (matches[7] === undefined ? 0 : parseFloat(matches[7])) * 60 + 
+            (matches[6] === undefined ? 0 : parseFloat(matches[6])) * 3600 +
+            (matches[5] === undefined ? 0 : parseFloat(matches[5])) * 86400 +
+            (matches[4] === undefined ? 0 : parseFloat(matches[4])) * 604800 +
+            (matches[3] === undefined ? 0 : parseFloat(matches[3])) * 2592000 +
+            (matches[2] === undefined ? 0 : parseFloat(matches[2])) * 31536000
+        );
     },
 
-    getSeconds: function(durationObject){
-        return ((durationObject.sign == '-')?-1:1)*(
-            durationObject.seconds + 
-            durationObject.minutes * 60 + 
-            durationObject.hours * 3600 +
-            durationObject.days * 86400 +
-            durationObject.weeks * 604800 +
-            durationObject.months * 2592000 +
-            durationObject.years * 31536000
-        )
+    convertSeconds(seconds){
+        let durationObject = {
+            sign: seconds < 0 ? '-' : '',
+            years: 0,
+            months: 0,
+            weeks: 0,
+            days: 0,
+            hours: 0,
+            minutes: 0,
+            seconds: 0
+        };
+        if(seconds < 0) seconds = -seconds;
+        if(seconds >= 31536000){
+            durationObject.years = Math.floor(seconds/31536000);
+            seconds = seconds % 31536000;
+        }
+        if(seconds >= 2592000){
+            durationObject.months = Math.floor(seconds/2592000);
+            seconds = seconds % 2592000;
+        }
+        if(seconds >= 604800){
+            durationObject.weeks = Math.floor(seconds/604800);
+            seconds = seconds % 604800;
+        }
+        if(seconds >= 86400){
+            durationObject.days = Math.floor(seconds/86400);
+            seconds = seconds % 86400;
+        }
+        if(seconds >= 3600){
+            durationObject.hours = Math.floor(seconds/3600);
+            seconds = seconds % 3600;
+        }
+        if(seconds >= 60){
+            durationObject.minutes = Math.floor(seconds/60);
+            seconds = seconds % 60;
+        }
+        durationObject.seconds = seconds;
+        return durationObject;
     }
 };
 
@@ -220,7 +248,7 @@ function getURLParameters(url){
     }));
 }
 
-const youtube = {
+const Youtube = {
     search: async function(searchPhrase, type, pageToken){
         //type: video, playlist or channel
     
@@ -280,355 +308,11 @@ const youtube = {
     }
 };
 
-var discord = {
-    client: new Discord.Client(),
-    PREFIX: config.discord.commandPrefix,
-    server: {
-        playing: false,
-        startedPlayingFrom: 0,
-        autoplay: true,
-        loop: false,
-        wrapAround: true,
-        autoclean: false,
-        shuffle: false,
-        currentlyPlaying: null,
-        voiceConnection: null,
-        dispatcher: null,
-        stream: null,
-        queueId: 1,
-        queues: new Map([[0,{id:0, name:'Default',queue:[]}]]),
-        currentQueue: 0,
-        lastVoiceChannel: null,
-
-        async init(guild){
-            this.id = guild.id;
-            this.guild = guild;
-
-            let promises = [];
-            for(let memberId of (await guild.members.fetch()).keyArray()){
-                promises.push(this.initUser(memberId));
-            }
-            await Promise.all(promises);
-
-            this.readyResolve();
-        },
-
-        initUser(id){
-            return mongodb.collection('DiscordUser').updateOne(
-                {_id:id},
-                {$setOnInsert:{
-                    notifications:{
-                        discord: false,
-                        email: [],
-                        web: [],
-                        telegram: []
-                    }
-                }},
-                {upsert: true}
-            );
-        },
-
-        async getVoiceConnection(){
-            await this.onready;
-            if(!this.guild.voice || !this.guild.voice.channel) this.voiceConnection = null;
-            return this.voiceConnection;
-        },
-
-        async getDispatcher(){
-            await this.onready;
-            if(!(await this.getVoiceConnection())) this.dispatcher = null;
-            return this.dispatcher;
-        },
-
-        async distroyDispatcher(){
-            await this.onready;
-            (await this.getDispatcher())?.destroy();
-            this.dispatcher = null;
-        },
-
-        getCurrentQueue(){
-            return this.queues.get(this.currentQueue);
-        },
-
-        addQueue(name){
-            let queue = {id:this.queueId, name, queue:[]};
-            this.queues.set(this.queueId, queue);
-            this.queueId++;
-            // TODO: send change to sockets!
-            return queue;
-        },
-
-        removeQueue(queueId){
-            // TODO
-            // check if currentlyPlaying inside queue!
-        },
-
-        renameQueue(queueId, newName){
-            // TODO
-            // send change to sockets!
-        },
-
-        getSongIndexById(id, queue){
-            if(!queue) queue = this.getCurrentQueue();
-            let index = queue.queue.map(x => x.id).indexOf(id);
-            return (index >= 0)?index:null;
-        },
-
-        getSongIndexAndQueueById(id){
-            for(let queue of this.queues.values()){
-                let index = this.getSongIndexById(id, queue);
-                if(index != null) return {index,queue};
-            }
-            return null;
-        },
-
-        async joinVoiceChannel(msg){
-            await this.onready;
-            // if no message given, join the last voice channel
-            if(!msg){
-                if(await this.getVoiceConnection()) return true;
-                if(this.lastVoiceChannel){
-                    this.voiceConnection = await this.lastVoiceChannel.join();
-                }
-                else{
-                    throw 'No message given to retrieve author\'s voice channel, nor remembers the last voice connection.';
-                }
-            }
-            // else join the same voice channel as the author of the message
-            else if(!msg.guild.voice || !msg.guild.voice.channel || !this.voiceConnection){
-                if(!msg.member.voice || !msg.member.voice.channel){
-                    msg.channel.send('The bot is currently not in a Voice Channel. Please first join a voice channel to indicate where the bot should join.');
-                    return false;
-                }
-                this.lastVoiceChannel = msg.member.voice.channel;
-                this.voiceConnection = await msg.member.voice.channel.join();
-            }
-            else if(msg.member.voice?.channel && msg.member.voice.channel !== msg.guild.voice.channel){
-                msg.channel.send('command from member in another voice channel -> changing channel');
-                this.lastVoiceChannel = msg.member.voice.channel;
-                this.voiceConnection = await msg.member.voice.channel.join();
-            }
-            this.voiceConnection.on('disconnect',()=>{
-                this.voiceConnection = null;
-            });
-            return true;
-        },
-
-        async play(position=0){
-            await this.onready;
-            // postion in seconds
-            if(this.getCurrentQueue().queue.length === 0 || !(await this.getVoiceConnection())) return false;
-            if(await this.getDispatcher()) return true;
-            if(!this.currentlyPlaying){
-                this.currentlyPlaying = this.getCurrentQueue().queue[0];
-                io.emit('music_currentlyPlaying',this.currentlyPlaying.id);
-            }
-            [this.dispatcher, this.stream] = this.currentlyPlaying.play(await this.getVoiceConnection(),position);
-            this.playing = true;
-            this.startedPlayingFrom = position;
-            io.emit('music_playing',true);
-            io.emit('music_syncTime',position);
-
-            this.dispatcher.on('finish', ()=>{
-                if(!this.autoplay || this.getCurrentQueue().queue.length === 0){
-                    this.playing = false;
-                    this.currentlyPlaying = null;
-                    io.emit('music_currentlyPlaying',null);
-                    (await (this.getVoiceConnection())).disconnect();
-                    this.dispatcher = null;
-                    return;
-                }
-
-                if(this.loop) this.play();
-                else this.next();
-            });
-
-            return true;
-        },
-
-        async jumpToPostion(position){
-            await this.onready;
-            // postion in seconds
-            if(!this.currentlyPlaying || ISO8601.getSeconds(this.currentlyPlaying.duration)<position) return false;
-            await this.distroyDispatcher();
-            this.play(parseFloat(position));
-        },
-
-        async getCurrentPostion(){
-            await this.onready;
-            let dispatcher = await this.getDispatcher();
-            if(!dispatcher) return false;
-            return this.startedPlayingFrom + (dispatcher.streamTime/1000); // in seconds
-        },
-
-        async resume(){
-            await this.onready;
-            let dispatcher = await this.getDispatcher();
-            if(!dispatcher) return false;
-            dispatcher.resume();
-            this.playing = true;
-            io.emit('music_playing',true);
-            return true;
-        },
-
-        async pause(){
-            await this.onready;
-            let dispatcher = await this.getDispatcher();
-            if(!dispatcher) return false;
-            dispatcher.pause();
-            this.playing = false;
-            io.emit('music_playing',false);
-            return true;
-        },
-
-        async stop(){
-            await this.onready;
-            let dispatcher = await this.getDispatcher();
-            if(!dispatcher) return false;
-            await this.distroyDispatcher();
-            (await this.getVoiceConnection()).disconnect();
-            this.playing = false;
-            io.emit('music_playing',false);
-            io.emit('music_timeSync',0);
-            return true;
-        },
-
-        async skipToIndex(index){
-            await this.onready;
-            if(!this.getCurrentQueue().queue[index]) return false;
-
-            await this.distroyDispatcher();
-            this.currentlyPlaying = this.getCurrentQueue().queue[index];
-            io.emit('music_currentlyPlaying',this.currentlyPlaying.id);
-            this.play();
-            return true;
-        },
-
-        switchQueue(newQueueId){
-            if(!this.queues.get(newQueueId)) return false;
-            this.currentQueue = newQueueId;
-            return true;
-        },
-
-        async skipToSong(id){
-            await this.onready;
-            // TODO: search in all queues and switch if necessary
-            let index = this.getSongIndexById(id);
-            if(index == null) return false;
-            return await this.skipToIndex(index);
-        },
-
-        async next(){
-            await this.onready;
-            // TODO: repair logic for multiple queues
-            let index = this.getCurrentQueue().queue.indexOf(this.currentlyPlaying);
-            if(index == -1) return false;
-            if(this.autoclean && (!(await this.remove(index, true)) || this.getCurrentQueue().queue.length === 0)){
-                this.playing = false;
-                this.currentlyPlaying = null;
-                io.emit('music_currentlyPlaying',null);
-                (await this.getVoiceConnection()).disconnect();
-                this.dispatcher = null;
-                return true;
-            }
-            index = index + 1*(!this.autoclean);
-
-            if(this.shuffle){
-                return await this.skipToIndex(Math.floor(Math.random()*this.getCurrentQueue().queue.length));
-            }
-            else if(this.getCurrentQueue().queue[index]){
-                return await this.skipToIndex(index);
-            }
-            else{
-                if(this.wrapAround) return await this.skipToIndex(0);
-                else{
-                    this.playing = false;
-                    this.currentlyPlaying = null;
-                    io.emit('music_currentlyPlaying',null);
-                    (await this.getVoiceConnection()).disconnect();
-                    this.dispatcher = null;
-                }
-            }
-            return true;
-        },
-
-        async previous(){
-            await this.onready;
-            let index = this.getCurrentQueue().queue.indexOf(this.currentlyPlaying);
-            if(index == -1) return false;
-
-            if(this.shuffle){
-                return await this.skipToIndex(Math.floor(Math.random()*this.getCurrentQueue().queue.length));
-            }
-            else if(this.getCurrentQueue().queue[index - 1]){
-                return await this.skipToIndex(index - 1);
-            }
-            else{
-                if(this.wrapAround) return await this.skipToIndex(this.getCurrentQueue().queue.length - 1);
-                else return await this.skipToIndex(0);
-            }
-        },
-
-        addToQueue(songs){
-            for(let song of songs) this.getCurrentQueue().queue.push(song);
-            io.emit('music_append',songs);
-        },
-
-        async clearQueue(){
-            await this.onready;
-            await this.stop();
-            this.getCurrentQueue().queue = [];
-            this.currentlyPlaying = null;
-            io.emit('music_currentlyPlaying',null);
-            (await this.getDispatcher())?.end();
-            io.emit('music_clear');
-        },
-
-        async remove(index, notCheckIfPlaying){
-            await this.onready;
-            if(!this.getCurrentQueue().queue[index]) return false;
-            let song = this.getCurrentQueue().queue[index];
-            if(!notCheckIfPlaying && song == this.currentlyPlaying){
-                await this.next();
-                if(song != this.getCurrentQueue().queue[index]) return true; // if removed by autoclean
-            }
-            this.getCurrentQueue().queue.splice(index,1);
-            io.emit('music_remove', song.id);
-            return true;
-        },
-
-        setShuffle(state){
-            this.shuffle = !!state;
-            io.emit('music_shuffle', this.shuffle);
-        },
-
-        setLoop(state){
-            this.loop = !!state;
-            io.emit('music_loop', this.loop);
-        },
-
-        setAutoplay(state){
-            this.autoplay = !!state;
-            io.emit('music_autoplay', this.autoplay);
-        },
-
-        setAutoclean(state){
-            this.autoclean = !!state;
-            io.emit('music_autoclean', this.autoclean);
-        },
-
-        setWrapAround(state){
-            this.wrapAround = !!state;
-            io.emit('music_wrapAround', this.wrapAround);
-        }
-    }
-};
-discord.server.onready = new Promise(resolve => {discord.server.readyResolve = resolve});
-
 var objectSets = {
     Queue: new Map(),
     Song: new Map()
 }
+
 
 class Queue {
     static nextId = 0;
@@ -639,19 +323,84 @@ class Queue {
         objectSets.Queue.set(this.id, this);
         this.name = name;
         this.songs = songs; // contains actual objects
+        this.currentSong = null;
+    }
 
-        
+    addSongs(songs){
+        this.songs.push(...songs);
+        io.emit('music_updateQueue_'+this.id,{songs: this.songs.map(x => x.id)});
+    }
+
+    clear(){
+        for(let song of this.songs) objectSets.Song.delete(song.id);
+        this.songs = [];
+        io.emit('music_updateQueue_'+this.id,{songs: this.songs.map(x => x.id)});
+    }
+
+    next(settings){
+        let index = this.songs.indexOf(this.currentSong);
+        if(index < 0) return null;
+
+        if(settings.autoclean && this.songs.length > 1){
+            this.songs.splice(index, 1);
+        }
+        else index++;
+
+        if(this.songs.length == 0) return null;
+
+        if(settings.shuffle){
+            if(settings.autoclean && this.songs.length < 2) return null;
+            return this.songs[Math.floor(Math.random()*this.songs.length)];
+        }
+        else if(this.songs[index]) return this.songs[index];
+        else if(settings.wrapAround) return this.songs[0];
+        else return null;
+    }
+
+    previous(settings){
+        let index = this.songs.indexOf(this.currentSong);
+        if(index < 0) return null;
+
+        index--;
+
+        if(settings.shuffle) return this.songs[Math.floor(Math.random()*this.songs.length)];
+        else if(this.songs[index]) return this.songs[index];
+        else if(settings.wrapAround) return this.songs[this.songs.length-1];
+        else this.songs[0];
+    }
+
+    moveSong(song, newIndex){
+        let index = this.songs.indexOf(song);
+        if(index < 0) return false;
+        this.songs.splice(index, 1);
+        this.songs.splice(newIndex, 0, song);
+        io.emit('music_updateQueue_'+this.id,{songs: this.songs.map(x => x.id)});
+        return true;
+    }
+
+    rename(newName){
+        this.name = newName;
+        io.emit('music_updateQueue_'+this.id,{name: this.name});
+    }
+
+    getData(){
+        return {
+            id: this.id,
+            name: this.name,
+            songs: this.songs.map(x => x.id)
+        };
     }
 }
 
 class Song {
     static nextId = 0;
 
-    constructor(service, contentId, name, author, thumbnail, duration){
+    constructor(queue, service, contentId, name, author, thumbnail, duration){
         this.id = Song.nextId++;
         if(Song.nextId >= Number.MAX_SAFE_INTEGER) Song.nextId = 0;
         objectSets.Song.set(this.id, this);
 
+        this.queue = queue;
         this.service = service;
         this.contentId = contentId;
         this.name = name;
@@ -660,31 +409,37 @@ class Song {
         this.duration = duration;
     }
 
-    play(connection, position=0, stream){
-        // position in seconds
-        if(!connection) return;
-        if(!stream){
-            if(this.service === 'YouTube'){
-                stream = ytdl('https://www.youtube.com/watch?v='+this.contentId, { filter: 'audioonly' });
-            }
-            else{
-                return null;
-            }
+    getStream(){
+        if(this.service === 'YouTube'){
+            return ytdl('https://www.youtube.com/watch?v='+this.contentId, { filter: 'audioonly' });
         }
-        let dispatcher = connection.play(stream, {seek: position});
-        return [dispatcher, stream];
+        else{
+            return null;
+        }
     }
 
-    static async getFromURL(url){
+    getData(){
+        return {
+            id: this.id,
+            service: this.service,
+            contentId: this.contentId,
+            name: this.name,
+            author: this.author,
+            thumbnail: this.thumbnail,
+            duration: this.duration
+        };
+    }
+
+    static async getFromURL(url, queue){
         if(url.startsWith('https://')) url = url.substring(8);
         if(url.startsWith('http://')) url = url.substring(7);
         if(url.startsWith('www.')) url = url.substring(4);
 
-        if(this.isCollection(url)) return (await this.getCollection(url));
-        return [await this.getSingle(url)];
+        if(this.isCollection(url)) return (await this.getCollection(url, queue));
+        return [await this.getSingle(url, queue)];
     }
 
-    static async getSingle(url){
+    static async getSingle(url, queue){
         var service;
         var contentId;
         var name;
@@ -698,19 +453,19 @@ class Song {
             if(!pars.v) throw 'Not a valid youtube url';
             contentId = pars.v;
             
-            let ytData = await youtube.videoInfo(contentId);
+            let ytData = await Youtube.videoInfo(contentId);
             if(!ytData) throw 'Unable to fetch video meta data. Probably not a valid youtube url.';
             ytData = ytData[0];
             name = ytData.snippet.title;
             author = {name: ytData.snippet.channelTitle, id: ytData.snippet.channelId};
             thumbnail = ytData.snippet.thumbnails.default.url; // instead of default other tags (ordered by quality): default < medium < high < standard < maxres
-            duration = ISO8601.parseDuration(ytData.contentDetails.duration);
+            duration = Duration.parseISO8601(ytData.contentDetails.duration);
         }
 
-        return new Song(service, contentId, name, author, thumbnail, duration);
+        return new Song(queue, service, contentId, name, author, thumbnail, duration);
     }
 
-    static async getCollection(url){
+    static async getCollection(url, queue){
         var songs = [];
         var pars = getURLParameters(url);
 
@@ -718,18 +473,19 @@ class Song {
             if(!pars.list) throw 'Not a valid youtube url';
             let playlistId = pars.list;
             
-            let ytData = await youtube.playlistItems(playlistId, true);
+            let ytData = await Youtube.playlistItems(playlistId, true);
             if(!ytData) throw 'Unable to fetch video meta data. Probably not a valid youtube url.';
 
             for(let i in ytData){
                 if(!ytData[i] || !ytData[i].snippet || !ytData[i].videoSnippet || !ytData[i].contentDetails) continue;
                 songs.push(new Song(
+                    queue,
                     'YouTube', 
                     ytData[i].snippet.resourceId.videoId, 
                     ytData[i].videoSnippet.title, 
                     {name: ytData[i].videoSnippet.channelTitle, id: ytData[i].videoSnippet.channelId}, 
                     ytData[i].videoSnippet.thumbnails.default.url, // instead of default other tags (ordered by quality): default < medium < high < standard < maxres
-                    ISO8601.parseDuration(ytData[i].contentDetails.duration)
+                    Duration.parseISO8601(ytData[i].contentDetails.duration)
                 ));
             }
         }
@@ -743,6 +499,388 @@ class Song {
     }
 }
 
+var discord = {
+    client: new Discord.Client(),
+    PREFIX: config.discord.commandPrefix,
+    server: {
+        async init(guild){
+            this.guild = guild;
+            this.music.guild = guild;
+    
+            let promises = [];
+            for(let memberId of (await guild.members.fetch()).keyArray()){
+                promises.push(this.initUser(memberId));
+            }
+            await Promise.all(promises);
+    
+            this.ready();
+        },
+    
+        initUser(id){
+            return mongodb.collection('DiscordUser').updateOne(
+                {_id:id},
+                {$setOnInsert:{
+                    notifications:{
+                        discord: false,
+                        email: [],
+                        push: [],
+                        telegram: []
+                    }
+                }},
+                {upsert: true}
+            );
+        },
+    
+        music: {
+            currentQueue: new Queue('Default', []), // TODO: change intial queue
+            currentSong: null,
+            playing: false,
+            startedPlayingFrom: 0,
+    
+            voiceConnection: null,
+            dispatcher: null,
+            stream: null,
+            lastVoiceChannel: null,
+    
+            settings: {
+                autoplay: true,
+                loop: false,
+                wrapAround: true,
+                autoclean: false,
+                shuffle: false
+            },
+    
+            async joinVoiceChannel(msg){
+                await this.onready;
+                // if no message given, join the last voice channel
+                if(!msg){
+                    if(await this.getVoiceConnection()) return true;
+                    if(this.lastVoiceChannel){
+                        this.voiceConnection = await this.lastVoiceChannel.join();
+                    }
+                    else{
+                        throw 'No message given to retrieve author\'s voice channel, nor remembers the last voice connection.';
+                    }
+                }
+                // else join the same voice channel as the author of the message
+                else if(!msg.guild.voice || !msg.guild.voice.channel || !this.voiceConnection){
+                    if(!msg.member.voice || !msg.member.voice.channel){
+                        msg.channel.send('The bot is currently not in a Voice Channel. Please first join a voice channel to indicate where the bot should join.');
+                        return false;
+                    }
+                    this.lastVoiceChannel = msg.member.voice.channel;
+                    this.voiceConnection = await msg.member.voice.channel.join();
+                }
+                else if(msg.member.voice?.channel && msg.member.voice.channel !== msg.guild.voice.channel){
+                    msg.channel.send('command from member in another voice channel -> changing channel');
+                    this.lastVoiceChannel = msg.member.voice.channel;
+                    this.voiceConnection = await msg.member.voice.channel.join();
+                }
+                this.voiceConnection.on('disconnect',()=>{
+                    this.voiceConnection = null;
+                    this.dispatcher = null;
+                    this.playing = false;
+                    io.emit('music_playing',false);
+                });
+                return true;
+            },
+    
+            async play(position=0){
+                // postion in seconds
+                await this.onready;
+                if(this.currentQueue.songs.length === 0 || !(await this.getVoiceConnection())) return false; // unable to play (mo songs or no voice connection)
+                if(await this.getDispatcher()) return await this.resume(); // if already playing nothing to do
+    
+                if(!this.currentSong){ // if no current song, take first song of current queue
+                    this.currentSong = this.currentQueue.currentSong = this.currentQueue.songs[0];
+                    io.emit('music_currentSong',this.currentSong.id);
+                }
+                let stream = this.currentSong.getStream();
+                
+                this.dispatcher = (await this.getVoiceConnection()).play(stream, {seek: position});
+                this.playing = true;
+                this.startedPlayingFrom = position;
+                io.emit('music_playing',true);
+                io.emit('music_syncTime',position);
+    
+                this.dispatcher.on('finish', () => this.handleEndOfStream());
+    
+                return true;
+            },
+    
+            handleEndOfStream(){
+                this.dispatcher = null;
+
+                if(!this.settings.autoplay || this.currentQueue.songs.length === 0){
+                    this.playing = false;
+                    io.emit('music_playing', false);
+                    this.dispatcher = null;
+                    return;
+                }
+    
+                if(this.settings.loop) this.play();
+                else this.next();
+            },
+    
+            async skipToTime(position){
+                await this.onready;
+                // postion in seconds
+                if(this.currentSong?.duration<position) return false;
+                await this.destroyDispatcher();
+                this.play(position);
+                return true;
+            },
+    
+            async getCurrentPostion(){
+                await this.onready;
+                let dispatcher = await this.getDispatcher();
+                if(!dispatcher) return null;
+                return this.startedPlayingFrom + (dispatcher.streamTime/1000); // in seconds
+            },
+    
+            async resume(){
+                await this.onready;
+                let dispatcher = await this.getDispatcher();
+                if(!dispatcher) return await this.play();
+                if(this.playing) return true;
+                dispatcher.resume();
+                this.playing = true;
+                io.emit('music_playing',true);
+                return true;
+            },
+    
+            async pause(){
+                await this.onready;
+                let dispatcher = await this.getDispatcher();
+                if(!dispatcher) return false;
+                dispatcher.pause();
+                this.playing = false;
+                io.emit('music_playing',false);
+                return true;
+            },
+    
+            async stop(){
+                await this.onready;
+                let dispatcher = await this.getDispatcher();
+                if(!dispatcher) return false;
+                await this.destroyDispatcher();
+                (await this.getVoiceConnection()).disconnect();
+                this.playing = false;
+                io.emit('music_playing',false);
+                io.emit('music_syncTime',0);
+                return true;
+            },
+    
+            async next(){
+                await this.onready;
+                
+                await this.destroyDispatcher();
+                let song = this.currentQueue.next(this.settings);
+                if(song){
+                    this.currentSong = this.currentQueue.currentSong = song;
+                    io.emit('music_currentSong',this.currentSong.id);
+                    this.play();
+                }
+                else{
+                    this.playing = false;
+                    io.emit('music_playing',false);
+                    io.emit('music_syncTime',0);
+                }
+            },
+    
+            async previous(){
+                await this.onready;
+    
+                await this.destroyDispatcher();
+                let song = this.currentQueue.previous(this.settings);
+                if(song){
+                    this.currentSong = this.currentQueue.currentSong = song;
+                    io.emit('music_currentSong',this.currentSong.id);
+                    this.play();
+                }
+                else{
+                    this.playing = false;
+                    io.emit('music_playing',false);
+                    io.emit('music_syncTime',0);
+                }
+            },
+    
+            async playSong(songId){
+                await this.onready;
+
+                let song = objectSets.Song.get(songId);
+                if(!song) return false;
+    
+                if(song == this.currentSong) return true;
+    
+                await this.destroyDispatcher();
+    
+                this.currentQueue.currentSong = null;
+                this.currentQueue = song.queue;
+                this.currentSong = this.currentQueue.currentSong = song;
+                io.emit('music_currentSong',this.currentSong.id);
+                this.play();
+                return true;
+            },
+
+            async skipToIndex(index){
+                if(index < 0 || index >= this.currentQueue.songs.length) throw 'index out of bound';
+
+                let song = this.currentQueue.songs[index];
+                if(!song) throw 'song not found';
+    
+                if(song == this.currentSong) return true;
+    
+                await this.destroyDispatcher();
+    
+                this.currentSong = this.currentQueue.currentSong = song;
+                io.emit('music_currentSong',this.currentSong.id);
+                this.play();
+                return true;
+            },
+    
+            async removeSong(songId){
+                await this.onready;
+
+                let song = objectSets.Song.get(songId);
+                if(!song) return false;
+    
+                if(song == this.currentSong){
+                    await this.destroyDispatcher();
+    
+                    this.currentSong = this.currentQueue.currentSong = this.currentQueue.songs[this.currentQueue.songs.indexOf(song)+1];
+                    io.emit('music_currentSong',this.currentSong?.id);
+
+                    if(this.playing){
+                        if(!this.settings.autoplay || !this.currentSong){
+                            this.playing = false;
+                            io.emit('music_playing', false);
+                        }
+                        else this.play();
+                    }
+                }
+
+                song.queue.songs.splice(song.queue.songs.indexOf(song), 1);
+                objectSets.Song.delete(songId);
+            },
+
+            async removeQueue(queueId){
+                await this.onready;
+
+                if(objectSets.Queue.size < 2) throw 'Last queue cannot be removed';
+
+                let queue = objectSets.Queue.get(queueId);
+                if(!queue) return false;
+
+                if(this.currentSong.queue == queue){
+                    await this.destroyDispatcher();
+
+                    objectSets.Queue.delete(queueId);
+
+                    this.currentQueue = objectSets.Queue.values().next().value;
+                    this.currentSong = this.currentQueue.currentSong = this.currentQueue.songs[0];
+                    io.emit('music_currentSong',this.currentSong?.id);
+                    
+                    if(this.playing){
+                        if(this.currentSong) this.play();
+                        else{
+                            this.playing = false;
+                            io.emit('music_playing',false);
+                            io.emit('music_syncTime',0);
+                        }
+                    }
+                }
+                else{
+                    objectSets.Queue.delete(queueId);
+                }
+
+                socket.emit('music_removeQueue', queueId);
+                return true;
+            },
+
+            async clearQueue(queueId){
+                await this.onready;
+
+                let queue = objectSets.Queue.get(queueId);
+                if(!queue) return false;
+
+                if(this.currentSong.queue == queue){
+                    await this.destroyDispatcher();
+                    this.playing = false;
+                    io.emit('music_playing',false);
+                    io.emit('music_syncTime',0);
+                    this.currentSong = null;
+                    io.emit('music_currentSong',null);
+                }
+
+                queue.clear();
+
+                return true;
+            },
+    
+            moveSong(songId, newIndex){
+                let song = objectSets.Song.get(songId);
+                if(!song) return false;
+    
+                return song.queue.moveSong(song, newIndex);
+            },
+
+            addSongs(queueId, songs){
+                let queue = objectSets.Queue.get(queueId);
+                if(!queue) return false;
+
+                let songObjs = [];
+                for(let song of songs){
+                    if('service' in song && 'contentId' in song && 'name' in song && 'author' in song && 'thumbnail' in song && 'duration' in song && 
+                    'name' in song.author && 'id' in song.author){
+                        songObjs.push(new Song(queue, song.service, song.contentId, song.name, song.author, song.thumnail, song.duration));
+                    }
+                }
+
+                queue.addSongs(songObjs);
+            },
+
+            async addURL(queueId, url){
+                let queue = objectSets.Queue.get(queueId);
+                if(!queue) throw 'invalid queueId';
+
+                let songs = await Song.getFromURL(url, queue);
+                if(!songs.length) throw 'unable to retrieve songs from URL';
+                queue.addSongs(songs);
+                return songs[0].id;
+            },
+    
+            updateSetting(setting, value){
+                if(setting in this.settings){
+                    this.settings[setting] = value;
+                    io.emit('music_updateSetting', setting, value);
+                }
+            },
+        
+            async getVoiceConnection(){
+                await this.onready;
+                if(!this.guild.voice || !this.guild.voice.channel) this.voiceConnection = null;
+                return this.voiceConnection;
+            },
+        
+            async getDispatcher(){
+                await this.onready;
+                if(!(await this.getVoiceConnection())) this.dispatcher = null;
+                return this.dispatcher;
+            },
+        
+            async destroyDispatcher(){
+                await this.onready;
+                (await this.getDispatcher())?.destroy();
+                this.dispatcher = null;
+            }
+        }
+    }
+};
+discord.server.onready = discord.server.music.onready = new Promise(resolve => {discord.server.ready = resolve});
+
+
+
 discord.client.on('ready', () => {
     console.log('Bot is online');
 });
@@ -752,9 +890,9 @@ discord.client.on('guildMemberAdd', member => {
 });
 
 const notifications = {
-    web(user, text, url){
-        if(!user.notifications.web.length) return;
-        for(let device of user.notifications.web){
+    push(user, text, url){
+        if(!user.notifications.push.length) return;
+        for(let device of user.notifications.push){
             if(device.token) fetch('https://fcm.googleapis.com/fcm/send', {
                 method: 'POST',
                 headers: {
@@ -817,7 +955,7 @@ Original discord message: <a href="${url}">${url}</a>`
     },
 
     all(user, text, url){
-        this.web(user, text, url);
+        this.push(user, text, url);
         this.email(user, text, url);
         this.telegram(user, text, url);
         this.discord(user, text, url);
@@ -825,15 +963,15 @@ Original discord message: <a href="${url}">${url}</a>`
 }
 
 discord.client.on('message', async function(msg){
-    if(msg.content.startsWith('Ann:') /* msg.mentions.everyone && msg.content.startsWith('@everyone')*/){ // announcement
-        let text = msg.content;//.substring(9);
+    if(msg.mentions.everyone && msg.content.startsWith('@everyone')){ // announcement
+        let text = msg.content.substring(9);
         // read initialized users from MongoDB (only use those with notification settings)
         let users = await mongodb.collection('DiscordUser').find().toArray();
         for(let i=0; i<users.length; i++){
             if(
                 !users[i].notifications.discord && 
                 !users[i].notifications.email.length &&
-                !users[i].notifications.web.length &&
+                !users[i].notifications.push.length &&
                 !users[i].notifications.telegram.length
             ){
                 users.splice(i,1);
@@ -872,10 +1010,10 @@ discord.client.on('message', async function(msg){
         let reply;
 
         switch(args[0]){
-            case 'test':
-                
+            case 'ping':
+                msg.channel.send('pong');
                 break;
-
+            
             case 'init':
                 msg.channel.send(`Initalization link for <@${msg.author.id}>: https://foramitti.com/elias/pnp/?init=${msg.author.id}`);
                 break;
@@ -908,7 +1046,7 @@ discord.client.on('message', async function(msg){
                 break;
 
             case 'join':
-                await discord.server.joinVoiceChannel(msg);
+                await discord.server.music.joinVoiceChannel(msg);
             break;
 
             case 'add':  case 'append':
@@ -922,86 +1060,88 @@ discord.client.on('message', async function(msg){
                     // interpret as adding passed link into queue
                     
                     try{
-                        discord.server.addToQueue(await Song.getFromURL(args[1]));
+                        let firstSongId = await discord.server.music.addURL(discord.server.music.currentQueue.id, args[1]);
+                        if(args[0] == 'play'){
+                            if(!(await discord.server.music.joinVoiceChannel(msg))) break;
+                            await discord.server.music.playSong(firstSongId);
+                        }
                     }
                     catch(e){
+                        if(e instanceof Error) e = e.stack;
                         msg.channel.send('Error: '+e);
                         break;
                     }
                     
-                    
-                    if(args[0] !== 'play') break;
+                    break;
                 }
 
                 //else interpret as resume ->
             case 'resume':
-                if(!(await discord.server.joinVoiceChannel(msg))) break;
-                if(!(await discord.server.resume())){
-                    discord.server.play();
-                }
+                if(!(await discord.server.music.joinVoiceChannel(msg))) break;
+                discord.server.music.resume();
             break;
 
             case 'pause':
-                discord.server.pause();
+                discord.server.music.pause();
             break;
             
             case 'stop':
-                discord.server.stop();
+                discord.server.music.stop();
             break;
 
             case 'clear':
-                msg.channel.confirm('Are you sure you want to clear the music queue?', () => {discord.server.clearQueue();});
+                msg.channel.confirm('Are you sure you want to clear the music queue?', () => discord.server.music.clearQueue(discord.server.music.currentQueue.id));
             break;
 
-            case 'remove':
-                // TODO
-            break;
+            // TODO:
+            /*case 'remove':
+            break;*/
 
             case 'autoplay':
-                discord.server.autoplay = !discord.server.autoplay;
-                msg.channel.send('Autoplay **' + (discord.server.autoplay?'on':'off') + '**');
+                discord.server.music.updateSetting('autoplay', !discord.server.music.settings.autoplay);
+                msg.channel.send('Autoplay **' + (discord.server.music.settings.autoplay?'on':'off') + '**');
             break;
 
             case 'loop':
-                discord.server.loop = !discord.server.loop;
-                msg.channel.send('Loop **' + (discord.server.loop?'on':'off') + '**');
+                discord.server.music.updateSetting('loop', !discord.server.music.settings.loop);
+                msg.channel.send('Loop **' + (discord.server.music.settings.loop?'on':'off') + '**');
             break;
             
             case 'wraparound': case 'wrap':
-                discord.server.wrapAround = !discord.server.wrapAround;
-                msg.channel.send('Wrap Around **' + (discord.server.wrapAround?'on':'off') + '**');
+                discord.server.music.updateSetting('wrapAround', !discord.server.music.settings.wrapAround);
+                msg.channel.send('Wrap Around **' + (discord.server.music.settings.wrapAround?'on':'off') + '**');
             break;
 
             case 'autoclean':
-                discord.server.autoclean = !discord.server.autoclean;
-                msg.channel.send('Autoclean **' + (discord.server.autoclean?'on':'off') + '**');
+                discord.server.music.updateSetting('autoclean', !discord.server.music.settings.autoclean);
+                msg.channel.send('Autoclean **' + (discord.server.music.settings.autoclean?'on':'off') + '**');
             break;
 
             case 'shuffle':
-                discord.server.shuffle = !discord.server.shuffle;
-                msg.channel.send('Shuffle **' + (discord.server.shuffle?'on':'off') + '**');
+                discord.server.music.updateSetting('shuffle', !discord.server.music.settings.shuffle);
+                msg.channel.send('Shuffle **' + (discord.server.music.settings.shuffle?'on':'off') + '**');
             break;
 
             case 'info':
                 reply = (
-                    'Playing: **' + (discord.server.playing?'yes':'no') + 
-                    '**\nAutoplay: **' + (discord.server.autoplay?'on':'off') + 
-                    '**\nWrapping around: **' + (discord.server.wrapAround?'on':'off') + 
-                    '**\nLoop: **' + (discord.server.loop?'on':'off') + 
-                    '**\nShuffle: **' + (discord.server.shuffle?'on':'off') + 
-                    '**\nAutoclean: **' + (discord.server.autoclean?'on':'off') + '**\n'
+                    'Playing: **' + (discord.server.music.playing?'yes':'no') + 
+                    '**\nAutoplay: **' + (discord.server.music.settings.autoplay?'on':'off') + 
+                    '**\nWrapping around: **' + (discord.server.music.settings.wrapAround?'on':'off') + 
+                    '**\nLoop: **' + (discord.server.music.settings.loop?'on':'off') + 
+                    '**\nShuffle: **' + (discord.server.music.settings.shuffle?'on':'off') + 
+                    '**\nAutoclean: **' + (discord.server.music.settings.autoclean?'on':'off') + '**\n'
                 );
-                // no break to also display queue
+            break;
             
             case 'queue': case 'playlist': case 'list':
                 if(!reply) reply = '';
                 reply += 'Queue:\n';
-                if(discord.server.getCurrentQueue().queue.length === 0) reply += '   *empty*'
-                else for(let i in discord.server.getCurrentQueue().queue){
-                    reply += `${discord.server.getCurrentQueue().queue[i] == discord.server.currentlyPlaying ? ' ▸':'     '} ${parseInt(i)+1}. ${
-                        discord.server.getCurrentQueue().queue[i].name.replace(/\\/g,'\\\\').replace(/`/g,'\\`').replace(/\|/g,'\\|').replace(/\*/g,'\\*').replace(/_/g,'\\_')
+                if(!discord.server.music.currentQueue?.songs?.length) reply += '   *empty*'
+                else for(let i in discord.server.music.currentQueue.songs){
+                    reply += `${discord.server.music.currentQueue.songs[i] == discord.server.music.currentSong ? ' ▸':'     '} ${parseInt(i)+1}. ${
+                        discord.server.music.currentQueue.songs[i].name.replace(/\\/g,'\\\\').replace(/`/g,'\\`').replace(/\|/g,'\\|').replace(/\*/g,'\\*').replace(/_/g,'\\_')
                         .replace(/~/g,'\\~').replace(/>/g,'\\>').replace(/:/g,'\\:').replace(/#(?! )/g,'# ').replace(/@(?! )/g,'@ ')
-                    } (${discord.server.getCurrentQueue().queue[i].service})` + '\n';
+                    }` + '\n';
                 }
                 if(reply.length > 1800){
                     reply = reply.split('\n');
@@ -1018,14 +1158,14 @@ discord.client.on('message', async function(msg){
 
             case 'np': case 'nowplaying': case 'nowplay': case 'cp': case 'currentlyplaying': 
             case 'currentlyplay': case 'currentplaying': case 'currentplay':
-                let dispatcher = await discord.server.getDispatcher();
-                if(discord.server.currentlyPlaying && dispatcher){
-                    let progress = dispatcher.streamTime/ISO8601.getSeconds(discord.server.currentlyPlaying.duration)/1000;
+                let dispatcher = await discord.server.music.getDispatcher();
+                if(discord.server.music.currentSong && dispatcher){
+                    let progress = dispatcher.streamTime/discord.server.music.currentSong.duration/1000;
                     msg.channel.send(
                         `${
-                            discord.server.currentlyPlaying.name.replace(/\\/g,'\\\\').replace(/`/g,'\\`').replace(/\|/g,'\\|').replace(/\*/g,'\\*').replace(/_/g,'\\_')
+                            discord.server.music.currentSong.name.replace(/\\/g,'\\\\').replace(/`/g,'\\`').replace(/\|/g,'\\|').replace(/\*/g,'\\*').replace(/_/g,'\\_')
                             .replace(/~/g,'\\~').replace(/>/g,'\\>').replace(/:/g,'\\:').replace(/#(?! )/g,'# ').replace(/@(?! )/g,'@ ')
-                        } (${discord.server.currentlyPlaying.service})`+'\n'+
+                        } (${discord.server.music.currentSong.service})`+'\n'+
                         '▬'.repeat(Math.round(progress*18))+
                         ':radio_button:'+
                         '▬'.repeat(Math.round((1-progress+0.0001)*18))
@@ -1035,22 +1175,36 @@ discord.client.on('message', async function(msg){
             break;
 
             case 'skipto':
-                // TODO: if contains ':' jumpToPosition (with 1 ':' mm:ss with 2 ':' hh:mm:ss)
-                if(!args[1] || !(await discord.server.skipToIndex(parseInt(args[1])-1))) msg.channel.send('You need to specify the queue position where to skip to as a positive integer');
-            break;
+                if(!args[1]) return msg.channel.send('You need to specify the queue position where to skip to as a positive integer or provide a timestamp of the form hh:mm:ss or mm:ss');
 
             case 'skip': 
                 if(args[1]){
-                    if(!(await discord.server.skipToIndex(parseInt(args[1])-1))) msg.channel.send('You need to specify the queue position where to skip to as a positive integer');
+                    if(args[1].includes(':')){ // jumpToPosition mm:ss or hh:mm:ss
+                        let time = args[1].split(':').map(x => parseInt(x)).reverse();
+                        if(time.some(x => Number.isNaN(x))) return msg.channel.send('You need to provide a timestamp of the form hh:mm:ss or mm:ss');
+                        time = time[0] + time[1]*60 + (time[2] ? (time[2]*3600) : 0);
+                        discord.server.music.skipToTime(time);
+                    }
+                    else{ // interpret as index
+                        let index = parseInt(args[1])-1;
+                        if(Number.isNaN(index)) return msg.channel.send('You need to specify the queue position where to skip to as a positive integer');
+                        try{
+                            await discord.server.music.skipToIndex(index);
+                        }
+                        catch(e){
+                            if(e instanceof Error) e = e.stack;
+                            msg.channel.send('Error: '+e);
+                        }
+                    }
                     break;
                 }
                 // else interpret as next ->
             case 'next':
-                discord.server.next();
+                discord.server.music.next();
             break;
 
             case 'prev': case 'previous': case 'last':
-                discord.server.previous();
+                discord.server.music.previous();
             break;
 
             case 'dice': case 'd':
@@ -1130,66 +1284,10 @@ discord.client.on('message', async function(msg){
                     msg.channel.send('Result: ' + eval(formula));
                 }
                 catch(e){
-                    return msg.channel.send('Error during eval: '+e.message);
+                    if(e instanceof Error) e = e.stack;
+                    msg.channel.send('Error during eval: '+e);
+                    return;
                 }
-
-                /*let diceNumber;
-                let diceFaces;
-                if(args.length >= 3){
-                    diceNumber = parseInt(args[1]);
-                    diceFaces = args[2];
-                }
-                else{
-                    args[1] = args[1].toLowerCase();
-                    [diceNumber, diceFaces] = args[1].split('d');
-                    diceNumber = parseInt(diceNumber);
-                }
-
-                if(!diceNumber || diceNumber < 0){
-                    msg.channel.send('You need to specify the number of dice (first number) as a positive integer');
-                    break;
-                }
-
-                var results = [];
-
-                if(diceFaces === '2^n'){
-                    for(let i = 0; i<diceNumber; i++){
-                        results.push(2**Math.ceil(Math.random()*6));
-                    }
-                }
-                else{
-                    diceFaces = parseInt(diceFaces);
-                    if(!diceFaces || diceFaces < 0){
-                        msg.channel.send('You need to specify the dice faces (second number/parameter) either as a positive integer or as one of the special dice');
-                        break;
-                    }
-                    for(let i = 0; i<diceNumber; i++){
-                        results.push(Math.ceil(Math.random()*diceFaces));
-                    }
-                }
-
-                if(diceNumber > 20){
-                    reply = [''];
-                    let sum = Math.sum(...results);
-                    for(let i in results){
-                        if(i%20 == 0 && i != 0){
-                            reply[reply.length-1] += '...\n---\n**Result: '+sum+'**';
-                            reply.push('');
-                        }
-                        reply[reply.length-1] += `Dice ${parseInt(i)+1}: ${results[i]}` + '\n';
-                    }
-                    reply[reply.length-1] += '---\n**Result: '+sum+'**';
-
-                    msg.channel.sendPages(reply);
-                }
-                else{
-                    reply = '';
-                    for(let i in results){
-                        reply += `Dice ${parseInt(i)+1}: ${results[i]}` + '\n';
-                    }
-                    reply += '---\n**Result: '+Math.sum(...results)+'**';
-                    msg.channel.send(reply);
-                }*/
             break;
 
             case 'web':
@@ -1213,24 +1311,23 @@ discord.client.on('message', async function(msg){
 
 **MUSIC:**
 \`${discord.PREFIX}join\`: joins/switches to the same voice channel as the member, who set off the command, is in
-\`${discord.PREFIX}add source_url\` / \`${discord.PREFIX}append source_url\`: adds a new song to the end of the queue (supported source urls: YouTube video, YouTube playlist)
+\`${discord.PREFIX}add source_url\` / \`${discord.PREFIX}append source_url\`: adds a new song/new songs to the end of the queue (supported source urls: YouTube video, YouTube playlist)
 \`${discord.PREFIX}play source_url\`: adds a new song to the end of the queue and starts/resumes playing (supported source urls: YouTube video, YouTube playlist)
 \`${discord.PREFIX}play\` / \`${discord.PREFIX}resume\`: starts/resumes playing (joins/switches to the same voice channel as the member, who set off the command, is in)
 \`${discord.PREFIX}pause\`: pauses the music stream
 \`${discord.PREFIX}stop\`: stops the music stream (will restart at the same song but not the same song position)
 \`${discord.PREFIX}clear\`: clears the song queue
-\`${discord.PREFIX}queue\` / \`${discord.PREFIX}list\`: displays the song queue
 \`${discord.PREFIX}queue\` / \`${discord.PREFIX}list\` / \`${discord.PREFIX}playlist\`: displays the song queue
 \`${discord.PREFIX}np\` / \`${discord.PREFIX}nowplaying\` / \`${discord.PREFIX}nowplay\` / \`${discord.PREFIX}cp\` / \`${discord.PREFIX}currentlyplaying\` / \`${discord.PREFIX}currentlyplay\` /  \`${discord.PREFIX}currentplaying\` /  \`${discord.PREFIX}currentplay\`: displays the currently playing song
-\`${discord.PREFIX}skip index\` / \`${discord.PREFIX}skipto index\`: jumps to the provided queue index
+\`${discord.PREFIX}skip index/time\` / \`${discord.PREFIX}skipto index/time\`: jumps to the provided queue index if a positive integer is given or to a timestamp of the form hh:mm:ss or mm:ss inside the current song
 \`${discord.PREFIX}skip\` / \`${discord.PREFIX}next\`: jumps to the next song
-\`${discord.PREFIX}prev\` / \`${discord.PREFIX}previous\` / \`${discord.PREFIX}last\`: jumps to the last song
+\`${discord.PREFIX}prev\` / \`${discord.PREFIX}previous\` / \`${discord.PREFIX}last\`: jumps to the previous song
 \`${discord.PREFIX}autoplay\`: toggles if the bot automatically jumps to the next song after finishing the current song
 \`${discord.PREFIX}loop\`: toggles if the bot loops the current song
 \`${discord.PREFIX}wraparound\`: toggles if the bot jumps back to the first song after finishing the queue
 \`${discord.PREFIX}shuffle\`: toggles random song selection
 \`${discord.PREFIX}autoclean\`: toggles if the bot deletes finished songs from the queue
-\`${discord.PREFIX}info\`: displays current settings and the song queue
+\`${discord.PREFIX}info\`: displays current settings
 
 **P&P:**
 \`${discord.PREFIX}d dice_specifier\` / \`${discord.PREFIX}dice dice_specifier\`: rolls the dice specified by dice_specifier, e.g. \`?d 2d6\` rolls two six-sided dice, adds them up and displays the result (for a full explanation on dice notation please refer to the web interface (Game > Dice))
@@ -1346,40 +1443,50 @@ discord.client.login(config.discord.botToken).then(() => {
 let raisedHandUsers = new Map();
 let diceCollection = new Map();
 let diceId = 0;
+for(let dice of config.dice.initial){
+    diceCollection.set(diceId ,dice);
+    diceId++;
+}
 
 io.on('connection', async (socket) => {
 
     await discord.server.onready;
-    socket.emit('music_queue', discord.server.getCurrentQueue().queue);
-    socket.emit('music_currentlyPlaying', (discord.server.currentlyPlaying)?discord.server.currentlyPlaying.id:null);
-    socket.emit('music_playing', discord.server.playing);
-    socket.emit('music_shuffle', discord.server.shuffle);
-    socket.emit('music_loop', discord.server.loop);
-    socket.emit('music_autoplay', discord.server.autoplay);
-    socket.emit('music_autoclean', discord.server.autoclean);
-    socket.emit('music_wrapAround', discord.server.wrapAround);
     
     // MUSIC CALLS:
     {
-        socket.on('music_shifted', ([songId, newIndex]) => {
-            socket.broadcast.emit('shifted', [songId, newIndex]);
-            let index = discord.server.getSongIndexById(id);
-            if(index == null) return;
-            let song = discord.server.getCurrentQueue().queue.splice(index,1)[0];
-            discord.server.getCurrentQueue().queue.splice(newIndex,0,song);
+        socket.on('music_requestServerInfo', () => {
+            socket.emit('music_serveSettings', {
+                currentSong: discord.server.music.currentSong?.id,
+                currentQueue: discord.server.music.currentQueue?.id,
+                playing: discord.server.music.playing,
+                settings: discord.server.music.settings
+            });
         });
-    
-        socket.on('music_currentlyPlaying', (id)=>discord.server.skipToSong(id));
-        
-        socket.on('music_pause', ()=>discord.server.pause());
-    
+
+        socket.on('music_syncTime', async () => {
+            let position = await discord.server.music.getCurrentPostion();
+            if(position != null) socket.emit('music_syncTime',position);
+        });
+
+        async function autoSync(){
+            if(discord.server.music.playing && await discord.server.music.getDispatcher()){
+                let position = await discord.server.music.getCurrentPostion();
+                if(position != null) socket.emit('music_syncTime',position);
+            }
+            setTimeout(autoSync, 10000);
+        }
+        autoSync();
+
+        socket.on('music_playSong', (songId) => discord.server.music.playSong(songId));
+
         socket.on('music_resume', async function(){
             try{
-                await discord.server.joinVoiceChannel();
+                await discord.server.music.joinVoiceChannel();
             }
             catch(e){
+                if(e instanceof Error) e = e.stack;
                 socket.emit('err',
-                    'An error occured. Probably the bot is not yet in any voice channel and does not remember in which voice channel it was last. To fix this:\n\n'+
+                    'An error occured while connecting the bot to a voice channel. Probably the bot is not yet in one and does not remember the last voice channel it was in. To fix this:\n\n'+
                     '1. open Discord and navigate to the respective discord server\n'+
                     '2. join the voice channel, in which you want the bot to play music\n'+
                     '3. while staying the voice channel, open the bot-text-channel and type \'?join\'\n\n'+
@@ -1388,58 +1495,55 @@ io.on('connection', async (socket) => {
                 );
                 return;
             }
-            if(!(await discord.server.resume())){
-                if(!(await discord.server.play())){
-                    socket.emit('err','An error occured while starting to play');
-                }
-            }
+            if(!(await discord.server.music.resume()))
+                socket.emit('err','An error occured while starting to play');
         });
-    
-        socket.on('music_stop', ()=>discord.server.stop());
-        
-        socket.on('music_next', ()=>discord.server.next());
-        socket.on('music_prev', ()=>discord.server.previous());
-    
-        socket.on('music_remove', (id)=>{
-            let index = discord.server.getSongIndexById(id);
-            if(index == null) return;
-            discord.server.remove(index);
-        });
-    
-        socket.on('music_shuffle', (state)=>discord.server.setShuffle());
-    
-        socket.on('music_loop', (state)=>discord.server.setLoop());
-        
-        socket.on('music_autoplay', (state)=>discord.server.setAutoplay(state));
-        
-        socket.on('music_autoclean', (state)=>discord.server.setAutoclean(state));
-        
-        socket.on('music_wrapAround', (state)=>discord.server.setWrapAround(state));
-    
-        socket.on('music_syncTime', async ()=>{
-            let position = await discord.server.getCurrentPostion();
-            if(position) socket.emit('music_syncTime',position);
-        });
-    
-        async function autoSync(){
-            if(discord.server?.playing && await discord.server.getDispatcher()){
-                let position = await discord.server.getCurrentPostion();
-                if(position) socket.emit('music_syncTime',position);
-            }
-            setTimeout(autoSync, 10000);
-        }
-        autoSync();
-    
-        socket.on('music_jumpTo', position => discord.server.jumpToPostion(position));
-    
-        socket.on('music_appendURL', async function(url){
+
+        socket.on('music_pause', () => discord.server.music.pause());
+
+        socket.on('music_stop', () => discord.server.music.stop());
+
+        socket.on('music_next', () => discord.server.music.next());
+
+        socket.on('music_previous', () => discord.server.music.previous());
+
+        socket.on('music_skipToTime', (seconds) => discord.server.music.skipToTime(seconds));
+
+        socket.on('music_updateSetting', (setting, value) => discord.server.music.updateSetting(setting, value));
+
+        socket.on('music_moveSong', (songId, newIndex) => discord.server.music.moveSong(songId, newIndex));
+
+        socket.on('music_addSongs', (queueId, ...songs) => discord.server.music.addSongs(queueId, songs));
+
+        socket.on('music_addURL', async (queueId, url) => {
             try{
-                discord.server.addToQueue(await Song.getFromURL(url));
+                await discord.server.music.addURL(queueId, url);
             }
             catch(e){
-                console.error(e);
-                socket.emit('err','An error occured. Probably the given URL is not valid or supported.\n\nError message: '+e);
+                if(e instanceof Error) e = e.stack;
+                socket.emit('err',e);
             }
+        });
+
+        socket.on('music_removeSong', (songId) => discord.server.music.removeSong(songId));
+
+        socket.on('music_renameQueue', (queueId, newName) => objectSets.Queue.get(queueId)?.rename(newName));
+
+        socket.on('music_removeQueue', async (queueId) => {
+            try{
+                await discord.server.music.removeQueue(queueId);
+            }
+            catch(e){
+                if(e instanceof Error) e = e.stack;
+                socket.emit('err',e);
+            }
+        });
+
+        socket.on('music_requestQueues', () => socket.emit('music_serveQueues', Array.from(objectSets.Queue.values()).map(x => x.getData()) ));
+
+        socket.on('music_requestSong', (songId) => {
+            let song = objectSets.Song.get(songId);
+            if(song) socket.emit('music_serveSong_'+id, song.getData());
         });
     }
 
@@ -1509,18 +1613,28 @@ io.on('connection', async (socket) => {
 
         socket.on('notifications_subscribePush', async function(id, token, device){
             let user = (await mongodb.collection('DiscordUser').findOneAndUpdate(
-                {'_id':id, 'notifications.web.token': {$ne:token}},
-                {$push: {'notifications.web':{token,device}}},
+                {'_id':id, 'notifications.push.device.id': {$ne:device.id}},
+                {$push: {'notifications.push':{token,device}}},
                 {returnOriginal:false}
             ))?.value;
 
             if(user) io.emit('updateDiscordUser_'+user._id,user);
         });
 
-        socket.on('notifications_unsubscribePush', async function(id, token){
+        socket.on('notifications_unsubscribePush', async function(id, deviceId){
             let user = (await mongodb.collection('DiscordUser').findOneAndUpdate(
-                {'_id':id, 'notifications.web.token':token},
-                {$pull: {'notifications.web':{'token':token}}},
+                {'_id':id, 'notifications.push.device.id':deviceId},
+                {$pull: {'notifications.push':{'device.id':deviceId}}},
+                {returnOriginal:false}
+            ))?.value;
+
+            if(user) io.emit('updateDiscordUser_'+user._id,user);
+        });
+
+        socket.on('notifications_updatePush', async function(id, deviceId, token){
+            let user = (await mongodb.collection('DiscordUser').findOneAndUpdate(
+                {'_id':id, 'notifications.push.device.id':deviceId},
+                {$set: {'notifications.push.$.token': token}},
                 {returnOriginal:false}
             ))?.value;
 
@@ -1566,6 +1680,7 @@ io.on('connection', async (socket) => {
                 else socket.emit('serveData_images', (await mysql.query('SELECT id, tags FROM images WHERE id BETWEEN '+id+' AND '+upperBound)));
             }
             catch(e){
+                if(e instanceof Error) e = e.stack;
                 socket.emit('err','requestData_images(): '+e);
             }
         });
@@ -2428,3 +2543,7 @@ io.on('connection', async (socket) => {
     }
     
 });
+
+/* TODO: 
+- discord bot commands music related
+*/

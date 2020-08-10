@@ -20,7 +20,7 @@ document.createNode = function(tag, properties, style){
     return elem;
 };
 
-Number.prototype.toFixedMin = function(x){
+Number.prototype.toMaxPrecision = function(x){
     return this.toFixed(x).replace(/0+$/,'').replace(/\.$/,'');
 }
 
@@ -386,33 +386,51 @@ const notifications = {
     available: false,
     token: null,
 
+    async checkToken(){
+        if(!this.available) throw new Error('Notifications are not available');
+        await this.onready;
+        let index = discordUser.notifications.push.map(x => x.device.id).indexOf(device.id);
+        if(index < 0) return true;
+        try{
+            let token = await firebase.messaging().getToken();
+            if(discordUser.notifications.push[index].token != token){
+                socket.emit('notifications_updatePush', discordUser._id, device.id, token);
+                this.token = token;
+                return false;
+            }
+        }
+        catch(e){
+            socket.emit('notifications_unsubscribePush', discordUser._id, device.id);
+            this.token = null;
+            alert('Error: Unable to initialize push notifications. You are now unsubscribed, if you wish to receive push notifications please try to reactivate them at Settings > Notifications.');
+        }
+        return true;
+    },
+
     async subscribe(){
         if(!this.available) throw new Error('Notifications are not available');
         await this.onready;
+        if(discordUser.notifications.push.map(x => x.device.id).includes(device.id)){
+            this.checkToken();
+            return this.token;
+        }
+
         try{
             let token = await firebase.messaging().getToken();
-            if(discordUser){
-                if(localStorage.getItem('pnp_push_token') != token)
-                    socket.emit('notifications_unsubscribePush', discordUser._id, localStorage.getItem('pnp_push_token'));
-                localStorage.setItem('pnp_push_token',token);
-                socket.emit('notifications_subscribePush', discordUser._id, localStorage.getItem('pnp_push_token'), {os: device.os, browser: device.browser});
-            }
+            socket.emit('notifications_subscribePush', discordUser._id, token, {os: device.os, browser: device.browser, id: device.id});
             this.token = token;
         }
         catch(e){
-            if(discordUser && localStorage.getItem('pnp_push_token')){
-                socket.emit('notifications_unsubscribePush', discordUser._id, localStorage.getItem('pnp_push_token'));
-            }
             this.token = null;
+            alert('Error: Unable to initialize push notifications. If you accidentally declined or were not asked for notification permission by your browser, '+
+                'please reset your respective browser setting for this website and try again.');
         }
         return this.token;
     },
 
-    unsubscribe(token){
-        if(discordUser){
-            if(token) socket.emit('notifications_unsubscribePush', discordUser._id, token);
-            else if(this.token) socket.emit('notifications_unsubscribePush', discordUser._id, this.token);
-        }
+    unsubscribe(deviceId){
+        if(!deviceId) deviceId = device.id;
+        socket.emit('notifications_unsubscribePush', discordUser._id, deviceId);
     }
 }
 notifications.onready = new Promise(resolve => {notifications.ready = resolve});
@@ -459,9 +477,7 @@ function onDiscordUserLoaded(){
         settings.updateDiscordUser();
     });
 
-    if(localStorage.getItem('pnp_push_token') && !discordUser.notifications.web.map(x => x.token).includes(localStorage.getItem('pnp_push_token')))
-        localStorage.getItem('pnp_push','0');
-    if(parseInt(localStorage.getItem('pnp_push'))) notifications.subscribe();
+    if(notifications.available) notifications.checkToken();
 
     settings.updateDiscordUser();
     game.updateDiscordUser();
@@ -771,10 +787,12 @@ var settings = {
 
         this.dom.notifications.name.innerHTML = discordUser.name;
 
-        if(discordUser.notifications.web.some(x => x.token != notifications.token)){
+        this.dom.notifications.push.checkbox.checked = discordUser.notifications.push.map(x => x.device.id).includes(device.id);
+
+        if(discordUser.notifications.push.some(x => x.device.id != device.id)){
             this.dom.notifications.push.otherDevices.innerHTML = '';
-            for(let x of discordUser.notifications.web){
-                if(x.token == notifications.token) continue;
+            for(let x of discordUser.notifications.push){
+                if(x.device.id == device.id) continue;
                 let pushDevice = this.dom.notifications.push.otherDevices.appendChild(document.createNode('li',{
                     innerHTML: x.device.os.name + ' ' + x.device.os.version + ', ' + x.device.browser.name + ' ' + x.device.browser.version
                 }));
@@ -783,7 +801,7 @@ var settings = {
                     className:'icon remove_element_icon',
                     onclick: ()=>{
                         pushDevice.removeFromParent();
-                        notifications.unsubscribe(x.token);
+                        notifications.unsubscribe(x.device.id);
                     }
                 }));
             }
@@ -994,21 +1012,18 @@ If you want to know more:<br>`
                 onclick: ()=>popup.pwaInstall()
             }));
 
-            if(!localStorage.getItem('pnp_push')) localStorage.setItem('pnp_push','0');
             this.dom.notifications.push.main = this.dom.notifications.push.root.appendChild(document.createNode('div'));
             
             this.dom.notifications.push.checkbox = document.createNode('input',{
                 type: 'checkbox',
-                checked: parseInt(localStorage.getItem('pnp_push')),
                 onchange: async ()=>{
-                    localStorage.setItem('pnp_push',this.dom.notifications.push.checkbox.checked * 1);
                     if(this.dom.notifications.push.checkbox.checked){
-                        if(!(await notifications.subscribe())){
+                        if(await notifications.subscribe()) 
+                            this.dom.notifications.push.error.innerHTML = device.isPhone ? '' : 'Your device is not a mobile phone. This will probably not work reliably.';
+                        else{
                             this.dom.notifications.push.checkbox.checked = false;
                             this.dom.notifications.push.error.innerHTML = 'Notifications were blocked by your browser. Please look into your browser settings.';
-                            localStorage.setItem('pnp_push',0);
                         }
-                        else this.dom.notifications.push.error.innerHTML = device.isPhone ? '' : 'Your device is not a mobile phone. This will probably not work reliably.';
                     }
                     else notifications.unsubscribe();
                 }
@@ -1257,15 +1272,15 @@ var music = {
             }));
         this.dom.player.duration = this.dom.player.positionWrapper.appendChild(document.createNode('div', {id: 'music_position_duration'}));
 
-        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper'}))
+        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper', title:'loop'}))
             .appendChild(document.createNode('img', {src: 'icons/replay.png'}));
-        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper'}))
+        this.dom.player.menuButtons.shuffle = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper', title:'shuffle'}))
             .appendChild(document.createNode('img', {src: 'icons/shuffle.png'}));
-        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper'}))
+        this.dom.player.menuButtons.autoclean = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper', title:'autoclean'}))
             .appendChild(document.createNode('img', {src: 'icons/autoclean.png'}));
-        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper'}))
+        this.dom.player.menuButtons.wraparound = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper', title:'wrap around'}))
             .appendChild(document.createNode('img', {src: 'icons/wraparound2.png'}));
-        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper'}))
+        this.dom.player.menuButtons.autoplay = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper', title:'autoplay'}))
             .appendChild(document.createNode('img', {src: 'icons/autoplay.png'}));
 
         
@@ -1322,10 +1337,9 @@ class Widget {
         this.dom.hideIcon = this.dom.root.appendChild(document.createNode('div',{
             className:'widget_hide_icon',
             innerHTML:'x',
-            onclick: e=>{
-                e.stopPropagation();
-                this.hide();
-            }
+            onmousedown: e=>e.stopPropagation(),
+            ontouchstart: e=>e.stopPropagation(),
+            onclick: e=>this.close()
         }));
 
         if(options?.handle) this.dom.handle = options.handle;
@@ -1338,11 +1352,20 @@ class Widget {
 
         if (this.dom.handle) {
             // if present, the handle is where you move the element from
-            this.dom.handle.onmousedown = this.dom.handle.ontouchstart = e=>this.mousedown(e);
+            this.dom.handle.addEventListener('mousedown', e=>this.mousedown(e));
+            this.dom.handle.addEventListener('touchstart', e=>this.mousedown(e));
         } else {
             // otherwise, move the element from anywhere inside the element
-            this.dom.root.onmousedown = this.dom.root.ontouchstart = e=>this.mousedown(e);
+            this.dom.root.addEventListener('mousedown', e=>this.mousedown(e));
+            this.dom.root.addEventListener('touchstart', e=>this.mousedown(e));
         }
+
+        this.dom.root.addEventListener('contextmenu', e=>{
+            e.preventDefault();
+            addMenu.open(e.pageX,e.pageY,
+                ['Close',()=>this.close()]
+            );
+        });
     }
     
     mousedown(e) {
@@ -1397,30 +1420,30 @@ class Widget {
         this.dom.root.style.transform = `translate(-${100*this.x}%,-${100*this.y}%)`;
     }
 
-    show(){
+    open(){
         DOMCache.widgets.appendChild(this.dom.root);
     }
 
-    hide(){
+    close(){
         this.dom.root.removeFromParent();
         if(this.onclose) this.onclose();
     }
 }
 
-class LifeBarWidget extends Widget{
+class HealthBarWidget extends Widget{
     constructor(cell1, cell2, options){
-        let root = document.createNode('div', {className:'life_bar_wrapper'});
+        let root = document.createNode('div', {className:'health_bar_wrapper'});
         super(root, options);
 
         this.cells = [cell1, cell2]; // after update first entry always has smaller value
 
-        this.dom.relativeLabel = this.dom.root.appendChild(document.createNode('div', {className:'life_bar_relative_label'}));
-        this.dom.totalLabel = this.dom.root.appendChild(document.createNode('div', {className:'life_bar_total_label'}));
-        this.dom.lifeBar = this.dom.root.appendChild(document.createNode('div', {className:'life_bar'}));
-        this.dom.lifeBarLeft = this.dom.lifeBar.appendChild(document.createNode('div', {className:'life_bar_left'}));
-        this.dom.lifeBarRight = this.dom.lifeBar.appendChild(document.createNode('div', {className:'life_bar_right'}));
-        this.dom.relativeValue = this.dom.root.appendChild(document.createNode('div', {className:'life_bar_relative'}));
-        this.dom.totalValue = this.dom.root.appendChild(document.createNode('div', {className:'life_bar_total'}));
+        this.dom.relativeLabel = this.dom.root.appendChild(document.createNode('div', {className:'health_bar_relative_label'}));
+        this.dom.totalLabel = this.dom.root.appendChild(document.createNode('div', {className:'health_bar_total_label'}));
+        this.dom.healthBar = this.dom.root.appendChild(document.createNode('div', {className:'health_bar'}));
+        this.dom.healthBarLeft = this.dom.healthBar.appendChild(document.createNode('div', {className:'health_bar_left'}));
+        this.dom.healthBarRight = this.dom.healthBar.appendChild(document.createNode('div', {className:'health_bar_right'}));
+        this.dom.relativeValue = this.dom.root.appendChild(document.createNode('div', {className:'health_bar_relative'}));
+        this.dom.totalValue = this.dom.root.appendChild(document.createNode('div', {className:'health_bar_total'}));
 
         this.update();
     }
@@ -1428,18 +1451,278 @@ class LifeBarWidget extends Widget{
     update(){
         if(this.cells[0].value > this.cells[1].value) this.cells.reverse();
 
-        this.dom.relativeLabel.innerHTML = this.cells[0].name;
-        this.dom.totalLabel.innerHTML = this.cells[1].name;
+        this.dom.relativeLabel.innerHTML = this.cells[0].player.name + ': ' + this.cells[0].name;
+        this.dom.totalLabel.innerHTML = this.cells[1].player.name + ': ' + this.cells[1].name;
         this.dom.relativeValue.innerHTML = this.cells[0].value;
         this.dom.totalValue.innerHTML = this.cells[1].value;
         if(this.cells[0].value < 0 || this.cells[1].value <= 0){
-            this.dom.lifeBarLeft.style.width = '0';
-            this.dom.lifeBarRight.style.width = '0';
+            this.dom.healthBarLeft.style.width = '0';
+            this.dom.healthBarRight.style.width = '0';
         }
         else{
             let relativePart = 100*this.cells[0].value/this.cells[1].value;
-            this.dom.lifeBarLeft.style.width = relativePart + 'px';
-            this.dom.lifeBarRight.style.width = (100-relativePart) + 'px';
+            this.dom.healthBarLeft.style.width = relativePart + 'px';
+            this.dom.healthBarRight.style.width = (100-relativePart) + 'px';
+        }
+    }
+
+    static openPopup(){
+        var wrapper = document.createNode('div',{className:'add_popup_wrapper',onclick: e=>e.stopPropagation()});
+
+        wrapper.appendChild(document.createNode('h3',{
+            innerHTML:'Create new health bar widget'
+        }));
+
+        let select = {
+            cell1: {
+                wrapper: wrapper.appendChild(document.createNode('div'))
+            },
+            cell2: {
+                wrapper: wrapper.appendChild(document.createNode('div'))
+            }
+        };
+
+        for(let cell of ['cell1', 'cell2']){
+            select[cell].storyline = select[cell].wrapper.appendChild(document.createNode('select', {onchange: async function(){
+                select[cell].player.innerHTML = '';
+                select[cell].player.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+                if(this.value != 'none' && this.value != ''){
+                    let storyline = objectSets.Storyline.get(parseInt(this.value));
+                    if(!storyline) storyline = await (new Storyline(parseInt(this.value))).init();
+                    for(let x of storyline.getPlayerEntities()) select[cell].player.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+                }
+                select[cell].player.onchange();
+            }}));
+            select[cell].storyline.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+            for(let [id,obj] of storylineSelectionOptions.entries()) select[cell].storyline.appendChild(document.createNode('option',{innerHTML:obj.innerHTML,value:id}));
+            select[cell].storyline.value = currentStoryline.id;
+    
+            select[cell].player = select[cell].wrapper.appendChild(document.createNode('select', {onchange: async function(){
+                select[cell].element.innerHTML = '';
+                select[cell].element.appendChild(document.createNode('option',{innerHTML:'-none-',value:'none'}));
+                if(this.value != 'none' && this.value != ''){
+                    let player = objectSets.PlayerEntity.get(parseInt(this.value));
+                    if(!player) return;
+                    for(let x of player.getAllDescendants('cells')){
+                        if(x.cellType != 'control_number' && x.cellType != 'constant' && x.cellType != 'dynamic') continue;
+                        select[cell].element.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+                    }
+                }
+            }}));
+    
+            select[cell].element = select[cell].wrapper.appendChild(document.createNode('select'));
+            select[cell].storyline.onchange();
+            if(currentStoryline.currentOpenPlayer != undefined && currentStoryline.currentOpenPlayer != null) select[cell].player.value = currentStoryline.currentOpenPlayer;
+            select[cell].player.onchange();
+        }
+
+
+        wrapper.appendChild(document.createNode('div',{
+            innerHTML:'The order of the cells does not matter. The cell with the smaller value will always be displayed as the relative part of the larger value.'
+        },{
+            margin: '10px 0',
+            fontSize: '9.5pt',
+            opacity: '0.7'
+        }));
+
+        function commit(){
+            let cell1 = objectSets.CellEntity.get(parseInt(select.cell1.element.value));
+            let cell2 = objectSets.CellEntity.get(parseInt(select.cell2.element.value));
+            if(!cell1 || !cell2) return alert('You need to select 2 cells to create a health bar widget.');
+            popup.close();
+            cell1.widgetizeHealthBar(cell2);
+        }
+
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Create', className:'add_commit_button', onclick: ()=>commit()}));
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Cancel', className:'add_commit_button', onclick: ()=>popup.close()}));
+        
+        popup.open([wrapper]);
+    }
+}
+
+class DiceWidget extends Widget{
+    constructor(dice, options){
+        let root = document.createNode('div',{innerHTML:'<b>Dice: </b>'});
+
+        super(root, options);
+
+        this.dice = dice;
+
+        this.dom.formula = this.dom.root.appendChild(document.createNode('span',{innerHTML:dice.formula}));
+        this.dom.root.appendChild(document.createTextNode(' '));
+        this.dom.root.appendChild(document.createNode('img',{
+            className:'icon dice_roll_icon',
+            src: 'icons/roll_dice.png',
+            onmousedown: e=>e.stopPropagation(),
+            ontouchstart: e=>e.stopPropagation(),
+            onclick: e=>{
+                e.stopPropagation();
+                dice.roll();
+            }
+        }));
+        this.dom.root.appendChild(document.createTextNode(' '));
+        this.dom.result = this.dom.root.appendChild(document.createNode('b',{innerHTML:dice.result}));
+        this.dom.error = this.dom.root.appendChild(document.createNode('div',{className:'error'},{display:'none'}));
+
+        this.onclose = ()=>{
+            dice.dom.widgetize.style.display = '';
+        };
+    }
+}
+
+class CellWidget extends Widget{
+    constructor(cell, options){
+        let root = document.createNode('div');
+
+        super(root, options);
+
+        this.cell = cell;
+
+        this.onclose = ()=>{
+            cell.dom.icons.widgetize.style.display = '';
+            this.widgetVisible = false;
+        };
+
+        let nameWrapper = this.dom.root.appendChild(document.createNode('b'));
+        this.dom.name = nameWrapper.appendChild(document.createNode('span',{innerHTML:cell.name}));
+        nameWrapper.appendChild(document.createTextNode(': '));
+
+        switch(cell.cellType){
+            case 'dynamic':
+                this.dom.base = this.dom.root.appendChild(document.createNode('span',{innerHTML:cell.base}));
+                this.dom.root.appendChild(document.createTextNode(' - '));
+                this.dom.value = this.dom.root.appendChild(document.createNode('input',{
+                    onmousedown: e=>e.stopPropagation(),
+                    ontouchstart: e=>e.stopPropagation(),
+                    type: 'number',
+                    step: 'any',
+                    value: cell.value,
+                    onchange: ()=>{
+                        let value = parseFloat(this.dom.value.value);
+                        if(Number.isNaN(value)){
+                            this.dom.value.value = cell.offsetAbsolute ? cell.savedValue : cell.savedValue + cell.base;
+                            return;
+                        }
+                        value = cell.offsetAbsolute ? value : value - cell.base;
+                        if(value != cell.savedValue){
+                            cell.savedValue = value;
+                            cell.dom.value.value = value;
+                            socket.emit('updateData', 'CellEntity', cell.id, {savedValue: cell.savedValue});
+                            cell.prepareComputeValue();
+                            cell.computeValue();
+                        }
+                    }
+                }));
+                break;
+            
+            case 'constant':
+                this.dom.value = this.dom.root.appendChild(document.createNode('span',{innerHTML:cell.value}));
+                break;
+            
+            case 'control_number':
+                this.dom.value = this.dom.root.appendChild(document.createNode('input',{
+                    onmousedown: e=>e.stopPropagation(),
+                    ontouchstart: e=>e.stopPropagation(),
+                    type: 'number',
+                    step: 'any',
+                    value: cell.savedValue,
+                    onchange: ()=>{
+                        let value = parseFloat(this.dom.value.value);
+                        if(Number.isNaN(value)){
+                            this.dom.value.value = cell.savedValue;
+                            return;
+                        }
+                        if(value != cell.savedValue){
+                            cell.savedValue = value;
+                            cell.dom.value.value = value;
+                            socket.emit('updateData', 'CellEntity', cell.id, {savedValue: cell.savedValue});
+                            cell.prepareComputeValue();
+                            cell.computeValue();
+                        }
+                    }
+                }));
+                break;
+            
+            case 'control_text':
+                this.dom.value = this.dom.root.appendChild(document.createNode('input',{
+                    onmousedown: e=>e.stopPropagation(),
+                    ontouchstart: e=>e.stopPropagation(),
+                    value: cell.savedValue,
+                    onchange: ()=>{
+                        let value = this.dom.value.value;
+                        if(value != cell.savedValue){
+                            cell.savedValue = value;
+                            cell.dom.value.value = value;
+                            socket.emit('updateData', 'CellEntity', cell.id, {savedValue: cell.savedValue});
+                            cell.prepareComputeValue();
+                            cell.computeValue();
+                        }
+                    }
+                }));
+                break;
+            
+            case 'control_button':
+                this.dom.value = this.dom.root.appendChild(document.createNode('button',{
+                    onmousedown: e=>e.stopPropagation(),
+                    ontouchstart: e=>e.stopPropagation(),
+                    innerHTML: cell.name,
+                    onclick: e=>{
+                        e.stopPropagation();
+                        socket.emit('buttonPressed', cell.id);
+                        cell.value = true;
+                        cell.fireChangeEvent();
+                        cell.value = false;
+                        cell.fireChangeEvent();
+                    }
+                }));
+                break;
+            
+            case 'control_checkbox':
+                this.dom.value = this.dom.root.appendChild(document.createNode('input',{
+                    onmousedown: e=>e.stopPropagation(),
+                    ontouchstart: e=>e.stopPropagation(),
+                    type: 'checkbox',
+                    checked: cell.savedValue,
+                    onchange: ()=>{
+                        let value = this.dom.value.checked;
+                        if(value != cell.savedValue){
+                            cell.savedValue = value;
+                            cell.dom.value.checked = value;
+                            socket.emit('updateData', 'CellEntity', cell.id, {savedValue: cell.savedValue});
+                            cell.prepareComputeValue();
+                            cell.computeValue();
+                        }
+                    }
+                }));
+                break;
+            
+            case 'control_dropdown':
+                this.dom.value = this.dom.root.appendChild(document.createNode('select',{
+                    onmousedown: e=>e.stopPropagation(),
+                    ontouchstart: e=>e.stopPropagation(),
+                    onchange: ()=>{
+                        let value = parseInt(this.dom.value.value);
+                        if(Number.isNaN(value)){
+                            this.dom.value.value = cell.savedValue;
+                            if(!this.dom.value.value) cell.dom.value.value = 0;
+                            return;
+                        }
+                        if(value != cell.savedValue){
+                            cell.savedValue = value;
+                            cell.dom.value.value = value;
+                            socket.emit('updateData', 'CellEntity', cell.id, {savedValue: cell.savedValue});
+                            cell.prepareComputeValue();
+                            cell.computeValue();
+                        }
+                    }
+                }));
+                let options = cell.valueFunction.split('\n');
+                for(let i in options) this.dom.value.appendChild(document.createNode('option',{innerHTML:options[i],value:i}));
+                this.dom.value.value = cell.savedValue;
+                if(this.dom.value.value == ''){
+                    this.dom.value.value = 0;
+                }
+                break;
         }
     }
 }
@@ -1472,7 +1755,7 @@ class Dice {
             src:'icons/widgetize.png',
             onclick: ()=>{
                 this.dom.widgetize.style.display = 'none';
-                this.widget.show();
+                this.widget.open();
             }
         }));
 
@@ -1493,27 +1776,7 @@ class Dice {
         rollWrapper.appendChild(document.createTextNode(' '));
         this.dom.result = rollWrapper.appendChild(document.createNode('b',{innerHTML:this.result}));
 
-        this.dom.widget = {};
-        this.dom.widget.root = document.createNode('div',{innerHTML:'<b>Dice: </b>'});
-        this.dom.widget.formula = this.dom.widget.root.appendChild(document.createNode('span',{innerHTML:this.formula}));
-        this.dom.widget.root.appendChild(document.createTextNode(' '));
-        this.dom.widget.root.appendChild(document.createNode('img',{
-            className:'icon dice_roll_icon',
-            src: 'icons/roll_dice.png',
-            onmousedown: e=>e.stopPropagation(),
-            onclick: e=>{
-                e.stopPropagation();
-                this.roll();
-            }
-        }));
-        this.dom.widget.root.appendChild(document.createTextNode(' '));
-        this.dom.widget.result = this.dom.widget.root.appendChild(document.createNode('b',{innerHTML:this.result}));
-        this.dom.widget.error = this.dom.widget.root.appendChild(document.createNode('div',{className:'error'},{display:'none'}));
-
-        this.widget = new Widget(this.dom.widget.root);
-        this.widget.onclose = ()=>{
-            this.dom.widgetize.style.display = '';
-        };
+        this.widget = new DiceWidget(this);
 
         socket.on('updateDice_'+this.id, (data) => this.update(data));
 
@@ -1536,13 +1799,13 @@ class Dice {
     update(data){
         if(data.formula != undefined && data.formula != this.formula){
             this.formula = data.formula;
-            this.dom.widget.formula.innerHTML = this.formula;
+            this.widget.dom.formula.innerHTML = this.formula;
             this.dom.formula.value = this.formula;
         }
 
         if(data.result != undefined && data.result != this.result){
             this.result = data.result;
-            this.dom.widget.result.innerHTML = this.result;
+            this.widget.dom.result.innerHTML = this.result;
             this.dom.result.innerHTML = this.result;
         }
     }
@@ -1553,7 +1816,7 @@ class Dice {
 
     remove(){
         objectSets.Dice.delete(this.id);
-        this.widget.hide();
+        this.widget.close();
         this.dom.root.removeFromParent();
     }
 
@@ -1610,14 +1873,14 @@ class Dice {
     }
 
     setError(error, notWidget){
-        this.dom.widget.error.innerHTML = 'Error';
+        this.widget.dom.error.innerHTML = 'Error';
         this.dom.error.innerHTML = 'Error: ' + error.message;
-        if(!notWidget) this.dom.widget.error.style.display = '';
+        if(!notWidget) this.widget.dom.error.style.display = '';
         this.dom.error.style.display = '';
     }
 
     resetError(){
-        this.dom.widget.error.style.display = 'none';
+        this.widget.dom.error.style.display = 'none';
         this.dom.error.style.display = 'none';
     }
 
@@ -1651,12 +1914,12 @@ class Dice {
             return this.setError(new Error('Error during eval: '+e.message));
         }
         socket.emit('updateDice', this.id, {result: this.result});
-        this.dom.widget.root.style.width = (this.dom.widget.root.offsetWidth - 25) + 'px';
-        this.dom.widget.result.innerHTML = '';
+        this.widget.dom.root.style.width = (this.widget.dom.root.offsetWidth - 25) + 'px';
+        this.widget.dom.result.innerHTML = '';
         this.dom.result.innerHTML = '';
         setTimeout(()=>{
-            this.dom.widget.root.style.width = '';
-            this.dom.widget.result.innerHTML = this.result;
+            this.widget.dom.root.style.width = '';
+            this.widget.dom.result.innerHTML = this.result;
             this.dom.result.innerHTML = this.result;
         }, DICE_BLINK_DELAY);
         return this.result;
@@ -1818,6 +2081,8 @@ var game = {
         this.widgets.raiseHand.dom.root = document.createNode('div');
         this.widgets.raiseHand.dom.button = this.widgets.raiseHand.dom.root.appendChild(document.createNode('div', {
             className: 'button_wrapper',
+            onmousedown: e=>e.stopPropagation(),
+            ontouchstart: e=>e.stopPropagation(),
             onclick: ()=>this.toggleRaiseHand()
         }));
         this.widgets.raiseHand.dom.button.appendChild(document.createNode('img', {src: 'icons/hand.png'}));
@@ -1836,7 +2101,7 @@ var game = {
             className:'widgetize_icon', 
             onclick: ()=>{
                 this.dom.widgets.raiseHand.widgetize.style.display = 'none';
-                this.widgets.raiseHand.widget.show();
+                this.widgets.raiseHand.widget.open();
             }
         }));
         this.dom.widgets.raiseHand.widgetize.appendChild(document.createNode('img', {className:'icon', src:'icons/widgetize.png'}));
@@ -1890,7 +2155,7 @@ var game = {
             className:'widgetize_icon', 
             onclick: ()=>{
                 this.dom.widgets.raisedHands.widgetize.style.display = 'none';
-                this.widgets.raisedHands.widget.show();
+                this.widgets.raisedHands.widget.open();
             }
         }));
         this.dom.widgets.raisedHands.widgetize.appendChild(document.createNode('img', {className:'icon', src:'icons/widgetize.png'}));
@@ -1908,6 +2173,14 @@ var game = {
 
         socket.emit('requestRaisedHands');
 
+        this.dom.widgets.root.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
+        .appendChild(document.createNode('div',{innerHTML:'+', className:'add_element', onclick: e=>{
+            addMenu.open(e.pageX,e.pageY,
+                ['Health Bar Widget',()=>HealthBarWidget.openPopup()]
+            );
+            e.stopPropagation();
+        }}));
+
         this.loaded = true;
     },
 
@@ -1923,9 +2196,12 @@ var game = {
             socket.emit('unraiseHand', id);
         }}));
         let widgetDom = this.widgets.raisedHands.dom.list.appendChild(document.createNode('div', {innerHTML: username}));
-        widgetDom.appendChild(document.createNode('div', {innerHTML:'x',className:'unraise_hand_icon',onclick:()=>{
-            socket.emit('unraiseHand', id);
-        }}));
+        widgetDom.appendChild(document.createNode('div', {
+            innerHTML:'x',
+            className:'unraise_hand_icon',
+            onmousedown: e=>e.stopPropagation(),
+            ontouchstart: e=>e.stopPropagation(),
+            onclick:()=>socket.emit('unraiseHand', id)}));
         if(discordUser && discordUser._id == id) this.toggleRaiseHand(true, true);
 
         this.raisedHands.set(id,{dom, widgetDom, username});
@@ -4146,14 +4422,22 @@ class CellEntity extends Entity {
         this.dependencies = [];
         this.value = 0;
 
-        this.lifeBarWidgets = new Map();
+        this.healthBarWidgets = new Map();
 
         this.eventListeners.outbound = new Set();
 
         this.dom.root.classList.add('entity_compact');
-        this.dom.icons.draggable.classList.add('draggable_icon_compact');
-        this.dom.icons.edit.classList.add('edit_icon_compact');
-        this.dom.icons.delete.classList.add('delete_icon_compact');
+
+        this.widgetVisible = false;
+        this.dom.icons.widgetize = this.dom.root.insertBefore(document.createNode('div', {
+            className: 'widgetize_icon', 
+            onclick: ()=>{
+                this.dom.icons.widgetize.style.display = 'none';
+                this.widgetVisible = true;
+                this.widgetize();
+            }
+        }), this.dom.icons.draggable);
+        this.dom.icons.widgetize.appendChild(document.createNode('img', {className: 'icon', src:'icons/widgetize.png'}));
 
         this.dom.titleValue = this.dom.title.appendChild(document.createNode('div',{className: 'cell_title_value'}));
 
@@ -4173,19 +4457,20 @@ class CellEntity extends Entity {
     }
 
     widgetize(){
-        if(this.cellType = 'static') return;
-        if(this.widget) return this.widget.show();
-        // TODO
+        if(this.cellType == 'static') return;
+        if(this.widget) return this.widget.open();
+        this.widget = new CellWidget(this);
+        this.widget.open();
     }
 
-    widgetizeLifeBar(secondCell){
+    widgetizeHealthBar(secondCell){
         if(this.cellType != 'control_number' && this.cellType != 'constant' && this.cellType != 'dynamic') return;
         if(secondCell.cellType != 'control_number' && secondCell.cellType != 'constant' && secondCell.cellType != 'dynamic') return;
-        if(this.lifeBarWidgets.get(secondCell.id)) return this.lifeBarWidgets.get(secondCell.id).show();
-        let widget = new LifeBarWidget(this, secondCell);
-        this.lifeBarWidgets.set(secondCell.id, widget);
-        secondCell.lifeBarWidgets.set(this.id, widget);
-        widget.show();
+        if(this.healthBarWidgets.get(secondCell.id)) return this.healthBarWidgets.get(secondCell.id).open();
+        let widget = new HealthBarWidget(this, secondCell);
+        this.healthBarWidgets.set(secondCell.id, widget);
+        secondCell.healthBarWidgets.set(this.id, widget);
+        widget.open();
     }
 
     async parseFunction(functionString, retry=0){
@@ -4231,7 +4516,11 @@ class CellEntity extends Entity {
         await super.update(data);
         
         if(changedName){
-            if(this.cellType == 'control_button') this.dom.value.innerHTML = this.name;
+            for(let x of this.healthBarWidgets.values()) x.update();
+            if(this.cellType == 'control_button'){
+                if(this.widget) this.widget.dom.value.innerHTML = this.name;
+                this.dom.value.innerHTML = this.name;
+            }
             this.player.cell[this.referenceName] = this;
         }
 
@@ -4240,6 +4529,14 @@ class CellEntity extends Entity {
         if(data.savedValue != undefined && this.savedValue != data.savedValue){
             this.savedValue = data.savedValue;
             changed = true;
+            if(this.cellType == 'dynamic' || this.cellType == 'control_number' || this.cellType == 'control_text' || this.cellType == 'control_dropdown'){
+                this.dom.value.value = this.savedValue;
+                if(this.widget) this.widget.dom.value.value = this.savedValue;
+            }
+            else if(this.cellType == 'control_checkbox'){
+                this.dom.value.checked = this.savedValue;
+                if(this.widget) this.widget.dom.value.checked = this.savedValue;
+            }
         }
 
         if(this.cellType == undefined && data.cellType != undefined){
@@ -4268,6 +4565,10 @@ class CellEntity extends Entity {
             }
 
             switch(this.cellType){
+                case 'static':
+                    this.dom.icons.widgetize.style.display = 'none';
+                    break;
+
                 case 'dynamic':
                     this.dom.titleValue.appendChild(document.createTextNode(': '));
                     this.dom.base = this.dom.titleValue.appendChild(document.createNode('span',{innerHTML:'loading...'}));
@@ -4286,6 +4587,7 @@ class CellEntity extends Entity {
                             value = this.offsetAbsolute ? value : value - this.base;
                             if(value != this.savedValue){
                                 this.savedValue = value;
+                                if(this.widget) this.widget.dom.value.value = value;
                                 socket.emit('updateData', 'CellEntity', this.id, {savedValue: this.savedValue});
                                 this.prepareComputeValue();
                                 this.computeValue();
@@ -4314,6 +4616,7 @@ class CellEntity extends Entity {
                             }
                             if(value != this.savedValue){
                                 this.savedValue = value;
+                                if(this.widget) this.widget.dom.value.value = value;
                                 socket.emit('updateData', 'CellEntity', this.id, {savedValue: this.savedValue});
                                 this.prepareComputeValue();
                                 this.computeValue();
@@ -4331,6 +4634,7 @@ class CellEntity extends Entity {
                             let value = this.dom.value.value;
                             if(value != this.savedValue){
                                 this.savedValue = value;
+                                if(this.widget) this.widget.dom.value.value = value;
                                 socket.emit('updateData', 'CellEntity', this.id, {savedValue: this.savedValue});
                                 this.prepareComputeValue();
                                 this.computeValue();
@@ -4372,6 +4676,7 @@ class CellEntity extends Entity {
                             let value = this.dom.value.checked;
                             if(value != this.savedValue){
                                 this.savedValue = value;
+                                if(this.widget) this.widget.dom.value.checked = value;
                                 socket.emit('updateData', 'CellEntity', this.id, {savedValue: this.savedValue});
                                 this.prepareComputeValue();
                                 this.computeValue();
@@ -4393,6 +4698,7 @@ class CellEntity extends Entity {
                             }
                             if(value != this.savedValue){
                                 this.savedValue = value;
+                                if(this.widget) this.widget.dom.value.value = value;
                                 socket.emit('updateData', 'CellEntity', this.id, {savedValue: this.savedValue});
                                 this.prepareComputeValue();
                                 this.computeValue();
@@ -4422,6 +4728,15 @@ class CellEntity extends Entity {
                 if(this.dom.value.value == ''){
                     this.dom.value.value = 0;
                     this.dom.value.onchange();
+                }
+
+                if(this.widget){
+                    this.widget.dom.value.innerHTML = '';
+                    for(let i in options) this.widget.dom.value.appendChild(document.createNode('option',{innerHTML:options[i],value:i}));
+                    this.widget.dom.value.value = this.savedValue;
+                    if(this.widget.dom.value.value == ''){
+                        this.widget.dom.value.value = 0;
+                    }
                 }
             }
             else changedDependencies = true;
@@ -4561,7 +4876,8 @@ class CellEntity extends Entity {
                 this.dom.base.innerHTML = 'Err';
                 return;
             }
-            this.dom.base.innerHTML = this.base.toFixedMin(2);
+            this.dom.base.innerHTML = this.base.toMaxPrecision(2);
+            if(this.widget) this.widget.dom.base.innerHTML = this.base.toMaxPrecision(2);
 
             let reset;
             try{
@@ -4580,6 +4896,7 @@ class CellEntity extends Entity {
 
             this.value = this.offsetAbsolute ? this.savedValue : this.savedValue + this.base;
             if(parseFloat(this.dom.value.value) != this.value) this.dom.value.value = this.value;
+            if(this.widget && parseFloat(this.widget.dom.value.value) != this.value) this.widget.dom.value.value = this.value;
         }
         else if(this.cellType == 'constant'){
             $.this = this.player;
@@ -4605,10 +4922,11 @@ class CellEntity extends Entity {
                 this.dom.value.innerHTML = 'Err';
                 return;
             }
-            this.dom.value.innerHTML = this.value.toFixedMin(2);
+            this.dom.value.innerHTML = this.value.toMaxPrecision(2);
+            if(this.widget) this.widget.dom.value.innerHTML = this.value.toMaxPrecision(2);
         }
 
-        for(let x of this.lifeBarWidgets.values()) x.update();
+        for(let x of this.healthBarWidgets.values()) x.update();
         
         if(CELL_DEBUG) console.log(this.name, ', call super: ', Array.from(this.eventListeners.inbound.values()).map(x => x.name));
         if(!this.error) super.computeValue();
@@ -4639,8 +4957,12 @@ class CellEntity extends Entity {
 
         if(this.dom.input.valueFunction && this.dom.input.valueFunction.value != this.valueFunction) changed.valueFunction = this.dom.input.valueFunction.value;
         if(this.dom.input.resetFunction && this.dom.input.resetFunction.value != this.resetFunction) changed.resetFunction = this.dom.input.resetFunction.value;
-        if(this.dom.input.offsetAbsolute && Boolean(parseInt(this.dom.input.offsetAbsolute.value)) != this.offsetAbsolute) 
+        if(this.dom.input.offsetAbsolute && Boolean(parseInt(this.dom.input.offsetAbsolute.value)) != this.offsetAbsolute){
             changed.offsetAbsolute = Boolean(parseInt(this.dom.input.offsetAbsolute.value));
+            if(this.offsetAbsolute) changed.savedValue = this.savedValue - this.base;
+            else changed.savedValue = this.savedValue + this.base;
+        }
+            
 
         super.saveEdit(changed);
     }
@@ -5463,11 +5785,9 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
 
 /* TODO/NOTES:
 - hr and br system break sortable (and maybe more!!)
-- rewrite music server for multiple queues (some code broken; see local TODO)
 - widgets:
     - saving
-    - cell widgets
-    - health bar widget
+    - setting to hide player names on health bar widgets
 - value syntax explanation
 - pwa install explanation
 - value system:

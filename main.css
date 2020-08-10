@@ -153,7 +153,7 @@ code{
     cursor: pointer;
 }
 
-.edit_icon img, .delete_icon img, .draggable_icon img {
+.edit_icon img, .delete_icon img, .draggable_icon img, .widgetize_icon img {
     opacity: 0.5;
 }
 
@@ -161,7 +161,7 @@ code{
     cursor: move!important;
 }
 
-.draggable_icon_compact, .edit_icon_compact, .delete_icon_compact{
+.entity_compact .draggable_icon, .entity_compact .edit_icon, .entity_compact .delete_icon, .entity_compact .widgetize_icon{
     position: absolute!important;
     top: -7px;
     line-height: 12.5px;
@@ -173,16 +173,24 @@ code{
     border-radius: 7.5px;
 }
 
-.draggable_icon_compact, .delete_icon_compact{
+.entity_compact .draggable_icon, .entity_compact .delete_icon{
     right: -7px;
 }
 
-.edit_icon_compact{
-    right: 15px;
+.entity_compact .edit_icon{
+    right: 18px;
 }
 
-.draggable_icon_compact img, .edit_icon_compact img, .delete_icon_compact img{
+.entity_compact .widgetize_icon{
+    right: 43px;
+}
+
+.entity_compact .draggable_icon img, .entity_compact .edit_icon img, .entity_compact .delete_icon img{
     width: 9px!important;
+}
+
+.entity_compact .widgetize_icon img{
+    width: 13px!important;
 }
 
 .map_icon{
@@ -253,6 +261,7 @@ code{
     grid-template-rows: auto 1fr auto;
     height: 100%;
     width: 100%;
+    color: #ccc;
 }
 
 #image_menu img{
@@ -629,6 +638,7 @@ code{
 
 .cell_title_value span, .cell_title_value input{
     font: 400 13.3333px Arial;
+    vertical-align: bottom;
 }
 
 .settings_section h2, .settings_section h3{
@@ -834,12 +844,14 @@ code{
 .dice_icons{
     grid-area: c;
     text-align: right;
+    opacity: 0.7;
 }
 
 .dice_icon_distr{
     grid-area: f;
     margin-top: 5px;
     text-align: right;
+    opacity: 0.5;
 }
 
 .dice_icons img, .dice_icon_distr img{
@@ -864,6 +876,7 @@ code{
 .dice_roll_icon{
     cursor: pointer;
     vertical-align: top;
+    opacity: 0.8;
 }
 
 .unraise_hand_icon{
@@ -880,49 +893,49 @@ code{
     cursor: pointer;
 }
 
-.life_bar_wrapper{
+.health_bar_wrapper{
     display: grid;
     grid-template: 
         "a c d"
         "b c e";
 }
 
-.life_bar_relative_label{
+.health_bar_relative_label{
     grid-area: a;
     border-bottom: 1px solid;
     text-align: center;
 }
 
-.life_bar_total_label{
+.health_bar_total_label{
     grid-area: b;
     text-align: center;
 }
 
-.life_bar_relative{
+.health_bar_relative{
     grid-area: d;
     border-bottom: 1px solid;
     text-align: center;
 }
 
-.life_bar_total{
+.health_bar_total{
     grid-area: e;
     text-align: center;
 }
 
-.life_bar{
+.health_bar{
     grid-area: c;
     margin: auto 10px;
 }
 
-.life_bar_left, .life_bar_right{
+.health_bar_left, .health_bar_right{
     display: inline-block;
     height: 10px;
 }
 
-.life_bar_left{
+.health_bar_left{
     background-color: var(--backgrnd-color1);
 }
 
-.life_bar_right{
+.health_bar_right{
     background-color: var(--backgrnd-color6);
 }
