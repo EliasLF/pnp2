@@ -473,7 +473,7 @@ var discordUser;
 function onDiscordUserLoaded(){
     socket.on('updateDiscordUser_'+discordUser._id, newUser => {
         if(!newUser) return;
-        discordUser = newUser;
+        for(let i in newUser) discordUser[i] = newUser[i];
         settings.updateDiscordUser();
     });
 
@@ -1013,22 +1013,39 @@ If you want to know more:<br>`
             }));
 
             this.dom.notifications.push.main = this.dom.notifications.push.root.appendChild(document.createNode('div'));
-            
+
             this.dom.notifications.push.checkbox = document.createNode('input',{
                 type: 'checkbox',
                 onchange: async ()=>{
                     if(this.dom.notifications.push.checkbox.checked){
-                        if(await notifications.subscribe()) 
-                            this.dom.notifications.push.error.innerHTML = device.isPhone ? '' : 'Your device is not a mobile phone. This will probably not work reliably.';
-                        else{
+                        try{
+                            if(await notifications.subscribe()){
+                                this.dom.notifications.push.error.innerHTML = device.isPhone ? '' : ('Your device is not a mobile phone. This will probably not work reliably, since the service worker will only run whenever your browser is running. '+
+                                    'Therefore you only get notifications if your browser is open (and missed notifications will not be repeated later).');
+
+                                if(device.os == 'iPhone' || device.os == 'IPad') this.dom.notifications.push.error.innerHTML = 'At the time of writing this IOS has no support for web push notifications, but Apple is working on it. So maybe this form of notification might already work for you. In exactly 1 minute a test notification will be sent to you. '+
+                                    'To receive it you will most likely have to have this app closed/minimized at that point. If you get the test notification, your device is able to receive push notifications and the activation went fine.';
+                            }
+                            else{
+                                this.dom.notifications.push.checkbox.checked = false;
+                                this.dom.notifications.push.error.innerHTML = 'Notifications were blocked by your browser. Please look into your browser settings.';
+                            }
+                        }
+                        catch(e){
                             this.dom.notifications.push.checkbox.checked = false;
-                            this.dom.notifications.push.error.innerHTML = 'Notifications were blocked by your browser. Please look into your browser settings.';
+                            this.dom.notifications.push.error.innerHTML = 'Error during subscription. Most likely your browser does not support web push notifications.<br><br>Error:<br>'+e.stack.replace(/\n/g, '<br>');
                         }
                     }
                     else notifications.unsubscribe();
                 }
             });
-            this.dom.notifications.push.error = document.createNode('span',{className:'error'},{marginLeft:'5px'});
+            this.dom.notifications.push.error = document.createNode('div',{className:'error'},{marginBottom: '10px'});
+            this.dom.notifications.push.test = document.createNode('div');
+            this.dom.notifications.push.test.appendChild(document.createNode('button',{innerHTML: 'Test', onclick: ()=>{
+                alert('If push notifications are activated and working for this device, you will get one exactly 1 minute after you close this message. '+
+                    'To receive it you need to have the app closed/minimized at that point, since else your operating system will immidiatelly discard it.');
+                socket.emit('notifications_testPush', discordUser._id, device.id);
+            }}));
             
             this.dom.notifications.push.unavailable = document.createNode('span',{innerHTML:'Not available on this device'});
             
@@ -1188,6 +1205,7 @@ If you want to know more:<br>`
                 if(notifications.available){
                     this.dom.notifications.push.main.appendChild(this.dom.notifications.push.checkbox);
                     this.dom.notifications.push.main.appendChild(this.dom.notifications.push.error);
+                    this.dom.notifications.push.main.appendChild(this.dom.notifications.push.test);
                 }
                 else this.dom.notifications.push.main.appendChild(this.dom.notifications.push.unavailable);
             }

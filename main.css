@@ -814,7 +814,7 @@ code{
 }
 
 .error{
-    color: red;
+    color: var(--error-font-color);
 }
 
 .dice_wrapper{

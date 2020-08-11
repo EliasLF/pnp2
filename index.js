@@ -24,6 +24,8 @@ else var io = require('socket.io')(8081);
 const anchorme = require("anchorme").default;
 const Discord = require('discord.js');
 const ytdl = require('ytdl-core');
+const ytsr = require('ytsr');
+const ytpl = require('ytpl');
 const fetch = require('node-fetch');
 const mailTransport = require('nodemailer').createTransport({
     host: 'mail.foramitti.com',
@@ -184,7 +186,7 @@ function getReferenceName(name){
 
 
 const Duration = {
-    parseISO8601: function (iso8601Duration) { // returns seconds
+    parseISO8601(iso8601Duration) { // returns seconds
         var matches = iso8601Duration.match(/(-)?P(?:([.,\d]+)Y)?(?:([.,\d]+)M)?(?:([.,\d]+)W)?(?:([.,\d]+)D)?(?:T(?:([.,\d]+)H)?(?:([.,\d]+)M)?(?:([.,\d]+)S)?)?/);
     
         return ((matches[1] === undefined)?1:-1)*(
@@ -196,6 +198,12 @@ const Duration = {
             (matches[3] === undefined ? 0 : parseFloat(matches[3])) * 2592000 +
             (matches[2] === undefined ? 0 : parseFloat(matches[2])) * 31536000
         );
+    },
+
+    parseClockFormat(durationString){
+        let duration = durationString.split(':').map(x => parseInt(x)).reverse();
+        if(duration.some(x => Number.isNaN(x))) throw new Error('invalid format');
+        return duration[0] + (duration[1] ? (duration[1]*60) : 0) + (duration[2] ? (duration[2]*3600) : 0);
     },
 
     convertSeconds(seconds){
@@ -249,7 +257,122 @@ function getURLParameters(url){
 }
 
 const Youtube = {
-    search: async function(searchPhrase, type, pageToken){
+    async search(searchPhrase, {type, nextpageRef, limit}){
+        let data = await ytsr(searchPhrase, {limit, nextpageRef});
+        if(!data?.items) return {items:[]};
+
+        for(let i in data){
+            if(i != 'items' && i != 'nextpageRef') delete data[i];
+        }
+        let items = [];
+        for(let item of data.items){
+            if(!type || item.type == type){
+                if(item.type == 'video'){
+                    if(!item.title) continue;
+
+                    if(!item.duration) continue;
+                    item.duration = Duration.parseClockFormat(item.duration);
+                    if(!item.duration) continue;
+
+                    if(!item.thumbnail) item.thumnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
+
+                    if(!item.author) item.author = {name:''};
+                    for(let i in item.author){
+                        if(i != 'name' && i != 'ref') delete item[i];
+                    }
+
+                    item.contentId = item.link?.split('v=')[1];
+                    if(!item.contentId) continue;
+
+                    for(let i in item){
+                        if(i != 'type' && i != 'title' && i != 'contentId' && i != 'thumbnail' && i != 'author' && i != 'duration') delete item[i];
+                    }
+                    items.push(item);
+                }
+
+                else if(item.type == 'playlist'){
+                    if(!item.title) continue;
+
+                    item.length = parseInt(item.length);
+                    if(!item.length) continue;
+
+                    if(!item.thumbnail) item.thumnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
+
+                    if(!item.author) item.author = {name:''};
+                    for(let i in item.author){
+                        if(i != 'name' && i != 'ref') delete item[i];
+                    }
+
+                    item.contentId = item.link?.split('list=')[1];
+                    if(!item.contentId) continue;
+
+                    for(let i in item){
+                        if(i != 'type' && i != 'title' && i != 'contentId' && i != 'thumbnail' && i != 'author' && i != 'length') delete item[i];
+                    }
+                    items.push(item);
+                }
+            }
+        }
+        data.items = items;
+        return data;
+    },
+
+    async videoInfo(videoId){
+        let item = await ytdl.getBasicInfo(videoId);
+        if(!item.title) throw new Error('no title found for video');
+
+        data.duration = parseInt(data.length_seconds);
+        if(!item.duration) throw new Error('invalid duration');
+
+        item.thumnail = item.playerResponse?.videoDetails?.thumbnail?.thumbnails?.[0]?.url; // 0 for lowest quality
+        if(!item.thumbnail) item.thumnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
+
+        if(!item.author) item.author = {name:''};
+        if(item.author.channel_url) item.author.ref = item.author.channel_url;
+        for(let i in item.author){
+            if(i != 'name' && i != 'ref') delete item[i];
+        }
+
+        item.contentId = item.video_id;
+        if(!item.contentId) throw new Error('invalid content id');
+
+        for(let i in item){
+            if(i != 'title' && i != 'contentId' && i != 'thumbnail' && i != 'author' && i != 'duration') delete item[i];
+        }
+        
+        return item;
+    },
+
+    async playlistItems(playlistId){
+        let data = await ytpl(playlistId,{limit:Infinity});
+        if(!data?.items) return [];
+
+        let items = [];
+        for(let item of data.items){
+            if(!item.title) continue;
+
+            if(!item.duration) continue;
+            item.duration = Duration.parseClockFormat(item.duration);
+            if(!item.duration) continue;
+
+            if(!item.thumbnail) item.thumnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
+
+            if(!item.author) item.author = {name:''};
+            for(let i in item.author){
+                if(i != 'name' && i != 'ref') delete item[i];
+            }
+
+            item.contentId = item.id;
+            if(!item.contentId) continue;
+
+            for(let i in item){
+                if(i != 'title' && i != 'contentId' && i != 'thumbnail' && i != 'author' && i != 'duration') delete item[i];
+            }
+            items.push(item);
+        }
+        return items;
+    }
+    /*async search(searchPhrase, type, pageToken){
         //type: video, playlist or channel
     
         if(searchPhrase === undefined) throw 'search phrase missing';
@@ -266,7 +389,7 @@ const Youtube = {
 
     chachedVideos: new Map(),
 
-    videoInfo: async function(videoId, part='snippet,contentDetails'){
+    async videoInfo(videoId, part='snippet,contentDetails'){
         if(videoId === undefined) throw 'video id missing';
         if(this.chachedVideos.get(videoId)) return this.chachedVideos.get(videoId);
         let data = 'part='+encodeURIComponent(part)+'&key='+config.youtube.token+'&id='+encodeURIComponent(videoId);
@@ -281,7 +404,7 @@ const Youtube = {
         return false;
     },
 
-    playlistItems: async function(playlistId, extendedInfo, pageToken, i){
+    async playlistItems(playlistId, extendedInfo, pageToken, i){
         if(playlistId === undefined) throw 'playlist id missing';
         let data = 'part=snippet&maxResults=50&key='+config.youtube.token+'&playlistId='+encodeURIComponent(playlistId);
         if(pageToken) data += '&pageToken='+encodeURIComponent(pageToken);
@@ -305,7 +428,7 @@ const Youtube = {
         }
         if(output.items[0]) return output.items;
         return false;
-    }
+    }*/
 };
 
 var objectSets = {
@@ -401,12 +524,12 @@ class Song {
         objectSets.Song.set(this.id, this);
 
         this.queue = queue;
-        this.service = service;
-        this.contentId = contentId;
-        this.name = name;
-        this.author = author;
-        this.thumbnail = thumbnail;
-        this.duration = duration;
+        this.service = service; // string
+        this.contentId = contentId; // string
+        this.name = name; // string
+        this.author = author; // {name[, ref(url to author)]}
+        this.thumbnail = thumbnail; // string url
+        this.duration = duration; // number, seconds
     }
 
     getStream(){
@@ -440,53 +563,43 @@ class Song {
     }
 
     static async getSingle(url, queue){
-        var service;
-        var contentId;
-        var name;
-        var author;
-        var thumbnail;
-        var duration;
-        var pars = getURLParameters(url);
+        // var urlParameters = getURLParameters(url);
 
         if(url.startsWith('youtube.com/watch')){
-            service = 'YouTube';
-            if(!pars.v) throw 'Not a valid youtube url';
-            contentId = pars.v;
+            if(!ytdl.validateURL(url)) throw 'Not a valid youtube url';
             
-            let ytData = await Youtube.videoInfo(contentId);
-            if(!ytData) throw 'Unable to fetch video meta data. Probably not a valid youtube url.';
-            ytData = ytData[0];
-            name = ytData.snippet.title;
-            author = {name: ytData.snippet.channelTitle, id: ytData.snippet.channelId};
-            thumbnail = ytData.snippet.thumbnails.default.url; // instead of default other tags (ordered by quality): default < medium < high < standard < maxres
-            duration = Duration.parseISO8601(ytData.contentDetails.duration);
+            let ytData;
+            try{
+                ytData = await Youtube.videoInfo(contentId);
+            }
+            catch(e){
+                throw 'Unable to fetch video meta data. Error: '+e.stack;
+            }
+            if(!ytData) throw 'Unable to fetch video meta data.';
+            return new Song(queue, 'YouTube', ytData.contentId, ytData.title, ytData.author, ytData.thumbnail, ytData.duration);
         }
 
-        return new Song(queue, service, contentId, name, author, thumbnail, duration);
+        
     }
 
     static async getCollection(url, queue){
         var songs = [];
-        var pars = getURLParameters(url);
+        // var urlParameters = getURLParameters(url);
 
         if(url.startsWith('youtube.com/playlist')){
-            if(!pars.list) throw 'Not a valid youtube url';
-            let playlistId = pars.list;
+            if(!ytpl.validateURL(url)) throw 'Not a valid youtube url';
             
-            let ytData = await Youtube.playlistItems(playlistId, true);
-            if(!ytData) throw 'Unable to fetch video meta data. Probably not a valid youtube url.';
+            let ytData;
+            try{
+                ytData = await Youtube.playlistItems(await ytpl.getPlaylistID(url));
+            }
+            catch(e){
+                throw 'Unable to fetch playlist data. Error: '+e.stack;
+            }
+            if(!ytData) throw 'Unable to fetch playlist data.';
 
-            for(let i in ytData){
-                if(!ytData[i] || !ytData[i].snippet || !ytData[i].videoSnippet || !ytData[i].contentDetails) continue;
-                songs.push(new Song(
-                    queue,
-                    'YouTube', 
-                    ytData[i].snippet.resourceId.videoId, 
-                    ytData[i].videoSnippet.title, 
-                    {name: ytData[i].videoSnippet.channelTitle, id: ytData[i].videoSnippet.channelId}, 
-                    ytData[i].videoSnippet.thumbnails.default.url, // instead of default other tags (ordered by quality): default < medium < high < standard < maxres
-                    Duration.parseISO8601(ytData[i].contentDetails.duration)
-                ));
+            for(let x of ytData){
+                songs.push(new Song(queue, 'YouTube', x.contentId, x.title, x.author, x.thumbnail, x.duration));
             }
         }
 
@@ -831,10 +944,8 @@ var discord = {
 
                 let songObjs = [];
                 for(let song of songs){
-                    if('service' in song && 'contentId' in song && 'name' in song && 'author' in song && 'thumbnail' in song && 'duration' in song && 
-                    'name' in song.author && 'id' in song.author){
+                    if('service' in song && 'contentId' in song && 'name' in song && 'author' in song && 'thumbnail' in song && 'duration' in song && 'name' in song.author)
                         songObjs.push(new Song(queue, song.service, song.contentId, song.name, song.author, song.thumnail, song.duration));
-                    }
                 }
 
                 queue.addSongs(songObjs);
@@ -904,7 +1015,7 @@ const notifications = {
                         "title": "P&P Announcement",
                         "body": text,
                         "click_action": url,
-                        "icon": "https://foramitti.com/elias/logo/favicon.svg"
+                        "icon": "https://foramitti.com/elias/pnp/logo/favicon-192x192-maskable.png"
                     },
                     "to": device.token
                 })
@@ -963,8 +1074,8 @@ Original discord message: <a href="${url}">${url}</a>`
 }
 
 discord.client.on('message', async function(msg){
-    if(msg.mentions.everyone && msg.content.startsWith('@everyone')){ // announcement
-        let text = msg.content.substring(9);
+    if(msg.content.startsWith('Ann:')){//msg.mentions.everyone && msg.content.startsWith('@everyone')){ // announcement
+        let text = msg.content;//.substring(9);
         // read initialized users from MongoDB (only use those with notification settings)
         let users = await mongodb.collection('DiscordUser').find().toArray();
         for(let i=0; i<users.length; i++){
@@ -1180,14 +1291,18 @@ discord.client.on('message', async function(msg){
             case 'skip': 
                 if(args[1]){
                     if(args[1].includes(':')){ // jumpToPosition mm:ss or hh:mm:ss
-                        let time = args[1].split(':').map(x => parseInt(x)).reverse();
-                        if(time.some(x => Number.isNaN(x))) return msg.channel.send('You need to provide a timestamp of the form hh:mm:ss or mm:ss');
-                        time = time[0] + time[1]*60 + (time[2] ? (time[2]*3600) : 0);
-                        discord.server.music.skipToTime(time);
+                        try{
+                            let time = Duration.parseClockFormat(args[1]);
+                            discord.server.music.skipToTime(time);
+                        }
+                        catch(e){
+                            return msg.channel.send('You need to specify the queue position where to skip to as a positive integer or provide a timestamp of the form hh:mm:ss or mm:ss');
+                        }
                     }
                     else{ // interpret as index
                         let index = parseInt(args[1])-1;
-                        if(Number.isNaN(index)) return msg.channel.send('You need to specify the queue position where to skip to as a positive integer');
+                        if(Number.isNaN(index))
+                            return msg.channel.send('You need to specify the queue position where to skip to as a positive integer or provide a timestamp of the form hh:mm:ss or mm:ss');
                         try{
                             await discord.server.music.skipToIndex(index);
                         }
@@ -1545,6 +1660,13 @@ io.on('connection', async (socket) => {
             let song = objectSets.Song.get(songId);
             if(song) socket.emit('music_serveSong_'+id, song.getData());
         });
+
+        socket.on('music_searchYoutube', async (id, phrase, options) => {
+            // options: type: 'video' | 'playlist', nextpageRef, limit
+            if(!options) options = {};
+            if(!options.limit) options.limit = 25;
+            socket.emit('music_searchYoutube_'+id, await Youtube.search(phrase, options));
+        });
     }
 
     // DATA CALLS:
@@ -1618,7 +1740,60 @@ io.on('connection', async (socket) => {
                 {returnOriginal:false}
             ))?.value;
 
-            if(user) io.emit('updateDiscordUser_'+user._id,user);
+            if(!user){
+                user = (await mongodb.collection('DiscordUser').findOneAndUpdate(
+                    {'_id':id, 'notifications.push.device.id':device.id},
+                    {$set: {'notifications.push.$.token': token}},
+                    {returnOriginal:false}
+                ))?.value;
+            }
+
+            if(user){
+                io.emit('updateDiscordUser_'+user._id,user);
+                setTimeout(()=>fetch('https://fcm.googleapis.com/fcm/send', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'key='+config.firebase.messagingServerKey
+                    },
+                    body: JSON.stringify({
+                        "notification": {
+                            "title": "P&P Announcement",
+                            "body": 'You have successfully activated push notifications for P&P announcements',
+                            "click_action": 'https://foramitti.com/elias/pnp/',
+                            "icon": "https://foramitti.com/elias/pnp/logo/favicon-192x192-maskable.png"
+                        },
+                        "to": token
+                    })
+                }), 60000);
+            }
+        });
+
+        socket.on('notifications_testPush', async (id, deviceId)=>{
+            let user = await mongodb.collection('DiscordUser').findOne(
+                {'_id':id, 'notifications.push.device.id':deviceId}
+            );
+
+            if(user){
+                let token = user.notifications.push.find(x => x.device.id == deviceId)?.token;
+
+                if(token) setTimeout(()=>fetch('https://fcm.googleapis.com/fcm/send', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'key='+config.firebase.messagingServerKey
+                    },
+                    body: JSON.stringify({
+                        "notification": {
+                            "title": "P&P Announcement",
+                            "body": 'Push notifications for P&P announcements are activated and working correctly for this device',
+                            "click_action": 'https://foramitti.com/elias/pnp/',
+                            "icon": "https://foramitti.com/elias/pnp/logo/favicon-192x192-maskable.png"
+                        },
+                        "to": token
+                    })
+                }), 60000);
+            }
         });
 
         socket.on('notifications_unsubscribePush', async function(id, deviceId){
@@ -2543,7 +2718,3 @@ io.on('connection', async (socket) => {
     }
     
 });
-
-/* TODO: 
-- discord bot commands music related
-*/
