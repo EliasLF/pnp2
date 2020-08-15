@@ -12,7 +12,7 @@ if(location.search) history.pushState(null, '', '.');
 document.createNode = function(tag, properties, style){
     var elem = document.createElement(tag);
     for(let attr in properties){
-        elem[attr] = properties[attr];
+        if(properties[attr] != undefined) elem[attr] = properties[attr];
     }
     for(let attr in style){
         elem.style[attr] = style[attr];
@@ -543,6 +543,7 @@ async function socketRequestDataImages(id, upperBound){
 
 const CELL_DEBUG = false;
 const DICE_BLINK_DELAY = 100;
+const MUSIC_POSITION_PRECISION = 1;
 
 var $ = {};
 var currentlyEditing = null;
@@ -564,7 +565,9 @@ var objectSets = {
     NoteCategory: new Map(),
     BoardEnvironment: new Map(),
     BoardEntity: new Map(),
-    Dice: new Map()
+    Dice: new Map(),
+    Song: new Map(),
+    Queue: new Map()
 };
 var currentStoryline;
 
@@ -1214,44 +1217,239 @@ If you want to know more:<br>`
 };
 settings.loaded = new Promise(resolve => {settings.loadedResolve = resolve});
 
-class Song {
-    constructor(){
-        // TODO:
-        this.service = 'YouTube';
-        this.contentId = 'G1B4hAr3Ark';
-        this.thumbnail = 'https://i.ytimg.com/vi/G1B4hAr3Ark/hqdefault.jpg?sqp=-oaymwEZCPYBEIoBSFXyq4qpAwsIARUAAIhCGAFwAQ==&rs=AOn4CLD-Xz9FF2vNF9zL9HQ8v_wCkcwJ-g';
-        this.name = 'Hugo Kant - Out Of Time';
-        this.author = {
-            name: 'Seven Beats Music'
-        };
+class Playlist {
+    constructor(data){
+        this.service = data?.service ?? 'YouTube';
+        this.contentId = data?.contentId;
+        this.thumbnail = data?.thumbnail;
+        this.name = data?.title ?? 'loading...';
+        this.length = data?.length;
+        this.author = data?.author ?? {};
 
         this.dom = {};
         this.dom.root = document.createNode('div', {
             className:'song content_section',
-            onclick: ()=>{
-                console.log('play ',this.contentId);
-                document.getElementById('current_song')?.removeAttribute('id');
-                this.dom.root.id = 'current_song';
-                // socket.emit('currentlyPlaying',song.id);
+            onclick: e=>{
+                e.stopPropagation();
+                this.dom.root.style.display = 'none';
+                socket.emit('music_addURL',music.openedQueue.id,'https://www.youtube.com/playlist?list='+this.contentId);
             }
         });
-        this.dom.root.appendChild(document.createNode('div', {className:'song_thumbnail non_selectable'}))
-            .appendChild(document.createNode('a', {target:'_blank', href:(this.service == 'YouTube')?'https://www.youtube.com/watch?v='+this.contentId:''}))
-            .appendChild(document.createNode('img', {
-                loading: 'lazy',
-                src:this.thumbnail
-            }));
+        this.dom.thumbnailLink = this.dom.root.appendChild(document.createNode('div', {className:'song_thumbnail non_selectable'}))
+            .appendChild(document.createNode('a', {target:'_blank', href:(this.service == 'YouTube')?('https://www.youtube.com/watch?v='+this.contentId):''}));
+        this.dom.thumbnailLink.appendChild(document.createNode('span',{
+            className: 'playlist_length',
+            innerHTML: this.length
+        }));
+        this.dom.thumbnailLink.appendChild(document.createNode('img', {
+            loading: 'lazy',
+            src:this.thumbnail
+        }));
+        this.dom.root.appendChild(document.createNode('div', {className:'song_title', innerHTML:this.name}));
+        this.dom.root.appendChild(document.createNode('div', {className:'song_author', innerHTML:this.author.name}));
+        this.dom.root.appendChild(document.createNode('img', {
+            className:'song_service non_selectable', 
+            src: (this.service == 'YouTube')?'icons/youtube.png':undefined
+        }));
+    }
+}
+
+class Song {
+    constructor(id, queue, data){
+        this.id = id;
+        if(this.id != undefined) objectSets.Song.set(this.id, this);
+
+        this.queue = queue;
+        this.service = data?.service ?? 'YouTube';
+        this.contentId = data?.contentId;
+        this.thumbnail = data?.thumbnail;
+        this.name = data?.title ?? 'loading...';
+        this.duration = data?.duration;
+        this.author = data?.author ?? {};
+
+        this.dom = {};
+        this.dom.root = document.createNode('div', {
+            className:'song content_section',
+            onclick: e=>{
+                if(this.id == undefined){
+                    e.stopPropagation();
+                    this.dom.root.style.display = 'none';
+                    socket.emit('music_addSongs',music.openedQueue.id,this.getData());
+                }
+                else socket.emit('music_playSong',this.id);
+            }
+        });
+        this.dom.thumbnailLink = this.dom.root.appendChild(document.createNode('div', {className:'song_thumbnail non_selectable'}))
+            .appendChild(document.createNode('a', {target:'_blank', href:(this.service == 'YouTube')?('https://www.youtube.com/watch?v='+this.contentId):''}));
+        this.dom.thumbnailImg = this.dom.thumbnailLink.appendChild(document.createNode('img', {
+            loading: 'lazy',
+            src:this.thumbnail
+        }));
         this.dom.title = this.dom.root.appendChild(document.createNode('div', {className:'song_title', innerHTML:this.name}));
         this.dom.author = this.dom.root.appendChild(document.createNode('div', {className:'song_author', innerHTML:this.author.name}));
         this.dom.service = this.dom.root.appendChild(document.createNode('img', {
             className:'song_service non_selectable', 
-            src: (this.service == 'YouTube')?'icons/youtube.png':''
+            src: (this.service == 'YouTube')?'icons/youtube.png':undefined
         }));
-        this.dom.remove = this.dom.root.appendChild(document.createNode('img', {className:'song_remove non_selectable', src:'icons/cross.png', onclick: e=>{
-            e.stopPropagation();
-            console.log('remove ',this.contentId);
-            // socket.emit('remove',song.id);
-        }}));
+        if(this.id != undefined){
+            this.dom.remove = this.dom.root.appendChild(document.createNode('img', {className:'song_remove non_selectable', src:'icons/cross.png', onclick: e=>{
+                e.stopPropagation();
+                socket.emit('music_removeSong',this.id);
+            }}));
+        }
+    }
+
+    getData(){
+        return {
+            service: this.service,
+            contentId: this.contentId,
+            thumbnail: this.thumbnail,
+            name: this.name,
+            duration: this.duration,
+            author: this.author
+        };
+    }
+
+    async init(){
+        if(this.id == undefined) return this;
+        let resolve;
+        let loaded = new Promise(res => resolve = res);
+        socket.on('music_serveSong_'+this.id, (data)=>{
+            this.service = data.service;
+            this.contentId = data.contentId;
+            this.thumbnail = data.thumbnail;
+            this.name = data.name;
+            this.duration = data.duration;
+            this.author = data.author;
+
+            this.dom.thumbnailLink.href = (this.service == 'YouTube')?('https://www.youtube.com/watch?v='+this.contentId):'';
+            this.dom.thumbnailImg.src = this.thumbnail;
+            this.dom.title.innerHTML = this.name;
+            this.dom.author.innerHTML = this.author.name;
+            this.dom.service.src = (this.service == 'YouTube')?'icons/youtube.png':null;
+            resolve();
+        });
+
+        socket.emit('music_requestSong', this.id);
+
+        await loaded;
+
+        return this;
+    }
+}
+
+class Queue {
+    constructor(id, name, songIds){
+        this.id = id;
+        objectSets.Queue.set(this.id, this);
+        this.name = name;
+        this.songIds = songIds;
+        this.playing = false;
+        this.editing = false;
+
+        this.dom = {};
+        this.dom.root = document.createNode('div');
+
+        this.dom.option = music.dom.player.queueSelect.appendChild(document.createNode('option',{innerHTML:this.name, value:this.id}));
+
+        socket.on('music_updateQueue_'+this.id, (data)=>this.update(data));
+        socket.on('music_removeQueue_'+this.id, ()=>this.remove());
+
+        this.sortable = new Sortable.default([this.dom.root], {
+            draggable: ".song",
+            delay: 200,
+            mirror: {
+              constrainDimensions: true
+            }
+        });
+
+        this.sortable.on('sortable:start', e => {
+            this.setEditing(true);
+        });
+        this.sortable.on('sortable:stop', e => {
+            if(e.data.newIndex != e.data.oldIndex){
+                let song = this.songs[e.data.oldIndex];
+
+                this.songs.splice(e.data.newIndex,0, this.songs.splice(e.data.oldIndex,1)[0]);
+                this.songIds.splice(e.data.newIndex,0, this.songIds.splice(e.data.oldIndex,1)[0]);
+
+                socket.emit('music_moveSong',song.id,e.data.newIndex);
+            }
+            this.setEditing(false);
+        });
+    }
+
+    setEditing(value){
+        this.editing = value;
+        if(!value && this.updateDataCash) this.update();
+    }
+
+    setPlaying(value){
+        if(value == this.playing) return;
+        this.playing = value;
+        this.dom.option.innerHTML = this.playing ? (this.name + ' (&#9654;)') : this.name;
+    }
+
+    remove(){
+        objectSets.Queue.delete(this.id);
+        this.dom.option.removeFromParent();
+        if(music.openedQueue == this){
+            music.openedQueue = null;
+            music.openQueue();
+        }
+    }
+
+    async loadSongs(waitUntilLoaded){
+        let loadPromises = [];
+        this.songs = [];
+
+        for(let songId of this.songIds){
+            if(objectSets.Song.get(songId)){
+                this.songs.push(objectSets.Song.get(songId));
+            }
+            else{
+                let song = new Song(songId, this);
+                this.songs.push(song);
+                loadPromises.push(song.init());
+            }
+        }
+        
+        this.dom.root.innerHTML = '';
+        for(let song of this.songs) this.dom.root.appendChild(song.dom.root);
+        
+        if(waitUntilLoaded) await Promise.all(loadPromises);
+    }
+
+    async update(data){
+        if(this.editing){
+            function recursiveUpdateDataCash(cash, newData){
+                for(let i in newData){
+                    if(cash[i] && newData[i] && typeof(newData[i]) == 'object' && !Array.isArray(newData[i])){
+                        recursiveUpdateDataCash(cash[i], newData[i]);
+                    }
+                    else cash[i] = newData[i];
+                }
+            }
+
+            if(!this.updateDataCash) this.updateDataCash = data;
+            else recursiveUpdateDataCash(this.updateDataCash, data);
+            return;
+        }
+
+        if(!data) data = this.updateDataCash;
+        if(!data) return;
+
+        this.updateDataCash = null;
+
+        if(data.name != undefined && data.name != this.name){
+            this.name = data.name;
+            this.dom.option.innerHTML = this.playing ? (this.name + ' (&#9654;)') : this.name;
+        }
+
+        if(data.songs != undefined && !data.songs.equals(this.songIds)){
+            this.songIds = data.songs;
+            await this.loadSongs(true);
+        }
     }
 }
 
@@ -1266,16 +1464,89 @@ var music = {
 
     currentOpenTab: 'player',
 
+    openedQueue: null,
+
+    positionChanging: false,
+
+    server: {
+        time: 0,
+        playing: false,
+        currentSong: null,
+        currentQueue: null,
+        settings: {
+            autoplay: false,
+            loop: false,
+            wrapAround: false,
+            autoclean: false,
+            shuffle: false
+        }
+    },
+
+    setPlaying(value){
+        if(this.server.playing == value) return;
+        this.server.playing = value;
+        this.dom.player.menuButtons.play.src = this.server.playing ? 'icons/pause2.png' : 'icons/play2.png';
+    },
+
+    setSetting(setting, value){
+        if(this.server.settings[setting] == value) return;
+        this.server.settings[setting] = value;
+        if(value) this.dom.player.menuButtons[setting].parentNode.classList.add('active_button_wrapper');
+        else this.dom.player.menuButtons[setting].parentNode.classList.remove('active_button_wrapper');
+    },
+
+    syncTime(){
+        if(!this.positionChanging && openPrimaryTab == 'music' && this.currentOpenTab == 'player'){
+            if(!this.server.currentSong) this.dom.player.position.value = MUSIC_POSITION_PRECISION;
+            else{
+                let value = this.server.time/this.server.currentSong.duration;
+                if(value > 1) value = 1;
+                this.dom.player.position.value = value;
+            }
+        }
+        if(this.server.playing) this.server.time += 1;
+        setTimeout(()=>this.syncTime(), 1000 * MUSIC_POSITION_PRECISION);
+    },
+
+    setCurrentSong(id){
+        this.server.currentSong?.dom?.root?.removeAttribute('id');
+        this.server.currentSong = objectSets.Song.get(id);
+        this.server.currentQueue?.setPlaying(false);
+        this.server.currentQueue = this.server.currentSong?.queue;
+        this.server.currentQueue?.setPlaying(true);
+        if(this.server.currentSong) this.server.currentSong.dom.root.id = 'current_song';
+    },
+
     init(){
         this.dom.player = {};
         this.dom.player.root = document.createNode('div', {id:'music_player'});
         this.dom.player.menu = this.dom.player.root.appendChild(document.createNode('div', {id:'music_menu', className: 'content_section non_selectable'}));
 
         this.dom.player.menuButtons = {
-            previous: this.dom.player.menu.appendChild(document.createNode('img', {className:'icon',src:'icons/previous2.png'})),
-            play: this.dom.player.menu.appendChild(document.createNode('img', {className:'icon',src:'icons/play2.png'})),
-            stop: this.dom.player.menu.appendChild(document.createNode('img', {className:'icon',src:'icons/stop2.png'})),
-            next: this.dom.player.menu.appendChild(document.createNode('img', {className:'icon',src:'icons/next2.png'})),
+            previous: this.dom.player.menu.appendChild(document.createNode('img', {
+                className:'icon',
+                src:'icons/previous2.png',
+                onclick: ()=>socket.emit('music_previous')
+            })),
+            play: this.dom.player.menu.appendChild(document.createNode('img', {
+                className:'icon',
+                src:'icons/play2.png',
+                onclick: ()=>{
+                    this.setPlaying(!this.server.playing);
+                    if(this.server.playing) socket.emit('music_resume');
+                    else socket.emit('music_pause');
+                }
+            })),
+            stop: this.dom.player.menu.appendChild(document.createNode('img', {
+                className:'icon',
+                src:'icons/stop2.png',
+                onclick: ()=>socket.emit('music_stop')
+            })),
+            next: this.dom.player.menu.appendChild(document.createNode('img', {
+                className:'icon',
+                src:'icons/next2.png',
+                onclick: ()=>socket.emit('music_next')
+            })),
         };
 
         this.dom.player.positionWrapper = this.dom.player.menu.appendChild(document.createNode('div', {id: 'music_position_wrapper'}));
@@ -1286,29 +1557,272 @@ var music = {
                 id: 'music_position',
                 min: 0,
                 max: 1,
-                step: 'any'
+                step: 'any',
+                onmousedown: ()=>{this.positionChanging = true},
+                ontouchstart: ()=>{this.positionChanging = true},
+                onmouseup: ()=>{this.positionChanging = false},
+                ontouchend: ()=>{this.positionChanging = false},
+                onchange: ()=>{
+                    if(this.server.currentSong){
+                        let time = parseFloat(this.dom.player.position.value)*this.server.currentSong.duration;
+                        socket.emit('music_skipToTime', time);
+                        this.server.time = time;
+                    }
+                    else this.dom.player.position.value = 1;
+                }
             }));
         this.dom.player.duration = this.dom.player.positionWrapper.appendChild(document.createNode('div', {id: 'music_position_duration'}));
 
-        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper', title:'loop'}))
-            .appendChild(document.createNode('img', {src: 'icons/replay.png'}));
-        this.dom.player.menuButtons.shuffle = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper', title:'shuffle'}))
-            .appendChild(document.createNode('img', {src: 'icons/shuffle.png'}));
-        this.dom.player.menuButtons.autoclean = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper', title:'autoclean'}))
-            .appendChild(document.createNode('img', {src: 'icons/autoclean.png'}));
-        this.dom.player.menuButtons.wraparound = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper', title:'wrap around'}))
-            .appendChild(document.createNode('img', {src: 'icons/wraparound2.png'}));
-        this.dom.player.menuButtons.autoplay = this.dom.player.menu.appendChild(document.createNode('div', {className: 'button_wrapper', title:'autoplay'}))
-            .appendChild(document.createNode('img', {src: 'icons/autoplay.png'}));
+        this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {
+            className: 'button_wrapper', 
+            title:'loop',
+            onclick: ()=>{
+                this.setSetting('loop', !this.server.settings.loop);
+                socket.emit('music_updateSetting', 'loop', this.server.settings.loop);
+            }
+        })).appendChild(document.createNode('img', {src: 'icons/replay.png'}));
+        this.dom.player.menuButtons.shuffle = this.dom.player.menu.appendChild(document.createNode('div', {
+            className: 'button_wrapper', 
+            title:'shuffle',
+            onclick: ()=>{
+                this.setSetting('shuffle', !this.server.settings.shuffle);
+                socket.emit('music_updateSetting', 'shuffle', this.server.settings.shuffle);
+            }
+        })).appendChild(document.createNode('img', {src: 'icons/shuffle.png'}));
+        this.dom.player.menuButtons.autoclean = this.dom.player.menu.appendChild(document.createNode('div', {
+            className: 'button_wrapper', 
+            title:'autoclean',
+            onclick: ()=>{
+                this.setSetting('autoclean', !this.server.settings.autoclean);
+                socket.emit('music_updateSetting', 'autoclean', this.server.settings.autoclean);
+            }
+        })).appendChild(document.createNode('img', {src: 'icons/autoclean.png'}));
+        this.dom.player.menuButtons.wrapAround = this.dom.player.menu.appendChild(document.createNode('div', {
+            className: 'button_wrapper', 
+            title:'wrap around',
+            onclick: ()=>{
+                this.setSetting('wrapAround', !this.server.settings.wrapAround);
+                socket.emit('music_updateSetting', 'wrapAround', this.server.settings.wrapAround);
+            }
+        })).appendChild(document.createNode('img', {src: 'icons/wraparound2.png'}));
+        this.dom.player.menuButtons.autoplay = this.dom.player.menu.appendChild(document.createNode('div', {
+            className: 'button_wrapper', 
+            title:'autoplay',
+            onclick: ()=>{
+                this.setSetting('autoplay', !this.server.settings.autoplay);
+                socket.emit('music_updateSetting', 'autoplay', this.server.settings.autoplay);
+            }
+        })).appendChild(document.createNode('img', {src: 'icons/autoplay.png'}));
 
+        this.dom.player.queueControls = this.dom.player.root.appendChild(document.createNode('div', {innerHTML:'Queue: ', id:'music_queue_controls'}))
+        this.dom.player.queueSelect = this.dom.player.queueControls.appendChild(document.createNode('select', {
+            onchange:()=>this.openQueue(parseInt(this.dom.player.queueSelect.value))
+        }));
+        this.dom.player.queueControls.appendChild(document.createNode('div',{
+            innerHTML:'+',
+            className:'add_element add_element_small',
+            onclick: ()=>this.openAddQueuePopup()
+        }));
+        this.dom.player.queueControls.appendChild(document.createNode('img',{
+            src:'icons/edit.png',
+            className:'icon',
+            onclick: ()=>this.openRenameQueuePopup()
+        }));
+        this.dom.player.queueControls.appendChild(document.createNode('img',{
+            src:'icons/clear.png',
+            className:'icon',
+            onclick: ()=>this.clearQueue()
+        }));
+        this.dom.player.queueControls.appendChild(document.createNode('img',{
+            src:'icons/bin.png',
+            className:'icon',
+            onclick: ()=>this.removeQueue()
+        }));
         
         this.dom.player.songlist = this.dom.player.root.appendChild(document.createNode('div', {id:'songlist'}));
-        let test = new Song();
-        this.dom.player.songlist.appendChild(test.dom.root);
-        test = new Song();
-        this.dom.player.songlist.appendChild(test.dom.root);
-        test = new Song();
-        this.dom.player.songlist.appendChild(test.dom.root);
+
+        this.dom.player.root.appendChild(document.createNode('div',{className:'add_element_wrapper non_selectable'}))
+        .appendChild(document.createNode('div',{
+            innerHTML:'+', 
+            className:'add_element', 
+            onclick: ()=>this.openYoutubePopup()
+        }));
+
+
+        socket.on('music_playing', value=>this.setPlaying(value));
+        socket.on('music_updateSetting', (setting, value)=>this.setSetting(setting, value));
+        socket.on('music_currentSong', id=>this.setCurrentSong(id));
+        socket.on('music_addQueue', queueData=>this.addQueue(queueData));
+
+        socket.on('music_serveQueues', async queues=>{
+            let loadPromises = [];
+            this.dom.player.queueSelect.innerHTML = '';
+            for(let queue of queues){
+                loadPromises.push(this.addQueue(queue));
+            }
+            await Promise.all(loadPromises);
+            socket.emit('music_requestServerInfo');
+        });
+
+        socket.on('music_serveServerInfo', async server=>{
+            this.setPlaying(server.playing);
+            for(let i in server.settings) this.setSetting(i, server.settings[i]);
+            this.setCurrentSong(server.currentSong);
+            socket.emit('music_syncTime');
+            this.syncTime();
+
+            this.openQueue();
+            this.dom.player.queueSelect.value = this.openedQueue.id;
+        });
+
+        socket.on('music_syncTime', time=>this.server.time = time);
+
+        socket.emit('music_requestQueues');
+    },
+
+    openQueue(id){
+        let queue = objectSets.Queue.get(id);
+
+        if(queue) this.openedQueue = queue;
+        else{
+            if(this.openedQueue){
+                this.dom.player.queueSelect.value = this.openedQueue.id;
+                return;
+            }
+            else this.openedQueue = this.server.currentQueue ?? objectSets.Queue.values().next().value;
+        }
+        this.dom.player.songlist.innerHTML = '';
+        this.dom.player.songlist.appendChild(this.openedQueue.dom.root);
+    },
+
+    removeQueue(){
+        if(objectSets.Queue.size < 2) return alert('You cannot remove the last remaining queue.');
+        if(!this.openedQueue) return;
+        if(!confirm(`Are you sure you want to remove the queue '${this.openedQueue.name}'? This will also remove all its containing songs.`)) return;
+        if(!confirm('This action is irreversible. Do you want to proceed?')) return;
+        socket.emit('music_removeQueue', this.openedQueue.id);
+    },
+
+    clearQueue(){
+        if(!this.openedQueue) return;
+        if(!confirm(`Are you sure you want to clear the queue '${this.openedQueue.name}'? This will empty the queue and thereby remove all its containing songs.`)) return;
+        socket.emit('music_clearQueue', this.openedQueue.id);
+    },
+
+    addQueue(queue){
+        return (new Queue(queue.id, queue.name, queue.songs)).loadSongs();
+    },
+
+    openRenameQueuePopup(){
+        if(!this.openedQueue) return;
+        var wrapper = document.createNode('div',{className:'add_popup_wrapper',onclick: e=>e.stopPropagation()});
+
+        wrapper.appendChild(document.createNode('h3',{
+            innerHTML: `Rename music queue '${this.openedQueue.name}'`
+        }));
+
+        let grid = wrapper.appendChild(document.createNode('div',{className:'add_popup_grid'}));
+        grid.appendChild(document.createNode('div',{innerHTML:'New name:&nbsp;'}));
+        let nameInput = grid.appendChild(document.createNode('div')).appendChild(document.createNode('input',{onkeyup: e=>{
+            if(e.key == 'Enter') commit();
+        }}));
+
+        var commit = ()=>{
+            if(!nameInput.value) return alert('The name field must not be empty.');
+            socket.emit('music_renameQueue', this.openedQueue.id, nameInput.value);
+
+            popup.close();
+        }
+
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Create', className:'add_commit_button', onclick: ()=>commit()}));
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Cancel', className:'add_commit_button', onclick: ()=>popup.close()}));
+        
+        popup.open([wrapper]);
+    },
+
+    openAddQueuePopup(){
+        var wrapper = document.createNode('div',{className:'add_popup_wrapper',onclick: e=>e.stopPropagation()});
+
+        wrapper.appendChild(document.createNode('h3',{
+            innerHTML:'Create new music queue'
+        }));
+
+        let grid = wrapper.appendChild(document.createNode('div',{className:'add_popup_grid'}));
+        grid.appendChild(document.createNode('div',{innerHTML:'Name:&nbsp;'}));
+        let nameInput = grid.appendChild(document.createNode('div')).appendChild(document.createNode('input',{onkeyup: e=>{
+            if(e.key == 'Enter') commit();
+        }}));
+
+        var commit = ()=>{
+            if(!nameInput.value) return alert('The name field must not be empty.');
+            socket.emit('music_addQueue', nameInput.value);
+
+            popup.close();
+        }
+
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Create', className:'add_commit_button', onclick: ()=>commit()}));
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Cancel', className:'add_commit_button', onclick: ()=>popup.close()}));
+        
+        popup.open([wrapper]);
+    },
+
+    openYoutubePopup(){
+        var wrapper = document.createNode('div',{className:'music_add_menu_wrapper'});
+
+        var searchSection = wrapper.appendChild(document.createNode('div',{className:'music_add_search_section'}));
+        searchSection.appendChild(document.createNode('h2',{
+            innerHTML: 'Add new song or playlist from YouTube'
+        }));
+        var searchInput = searchSection.appendChild(document.createNode('input',{
+            placeholder: 'search phrase or https://www.youtube.com/watch?v=...',
+            onclick: e=>e.stopPropagation(),
+            onkeyup: e=>{
+                if(e.key == 'Enter') search();
+            },
+            className:'music_add_search_input'
+        },{
+            width: '250px'
+        }));
+        searchSection.appendChild(document.createNode('button',{
+            innerHTML: 'Search',
+            onclick: e=>{
+                e.stopPropagation();
+                search();
+            }
+        }));
+
+        var search = ()=>{
+            resultSection.innerHTML = '';
+            if(!searchInput.value) return;
+
+            if(searchInput.value.includes('youtube.com')){
+                socket.emit('music_addURL', this.openedQueue.id, searchInput.value);
+                popup.close();
+                return;
+            }
+
+            DOMCache.overlays.loading.style.display = '';
+
+            let id = randomString();
+            socket.on('music_searchYoutube_'+id, (results)=>{
+                for(let result of results.items){
+                    if(result.type == 'playlist'){
+                        let playlist = new Playlist(result);
+                        resultSection.appendChild(playlist.dom.root);
+                    }
+                    else if(result.type == 'video'){
+                        let song = new Song(_,_,result);
+                        resultSection.appendChild(song.dom.root);
+                    }
+                }
+                DOMCache.overlays.loading.style.display = 'none';
+            });
+            socket.emit('music_searchYoutube', id, searchInput.value);
+        };
+
+        var resultSection = wrapper.appendChild(document.createNode('div',{id: 'music_add_menu'}));
+
+        popup.open([wrapper]);
     },
 
     openTab(tab){
@@ -5817,7 +6331,6 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
         - every br gets dashed border and some padding (enables clicking) -> turns into hr
         - hr on click removes it
 - transfering items
-- music
 - migrating old data
 - board system
 - map system
@@ -5825,11 +6338,12 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
 
 ISSUES:
 - creating new player from template -> not copying effect mappings correctly
-- Push notifications (old tokens etc.) -> use unique device id and check every at start up
-- deleting does not delete from $ set (can't use delete method, since it's only triggering -> need to use update method)
+- deleting does not delete from $ namespace set used for cell syntax (can't use delete method, since it's only triggering -> need to use update method)
 - rechecking and dependency reevaluation of cell functions necessary after deletion or renaming of items/skills/effects/cells/players
 - inefficiency of loading faulty cells (with undefined references) -> use loading promises or similar instead of just waiting with timeout
 - service worker is not caching (cache always empty)
+- sometimes dicord loads quicker then mongodb -> user initializing fails (solution -> introduce mongodb.loaded in promise pattern)
+
 
 PLANS:
 
@@ -5841,17 +6355,19 @@ PLANS:
 
 - Settings:
     - separate into sections (General, Storyline, Discord)
-        - General: Undo Protocol length/Undo/Redo (show protocol in foldable section (display Entity type, name and parameters and parameter values before and after on hover))
-        - Storyline: visibility of player entities, removing storyline info types, DM mode (activates visibility of protected entities)
+        - Undo Protocol length/Undo/Redo (show protocol in foldable section (display Entity type, name and parameters and parameter values before and after on hover))
+        - music player precision setting (instead of global const)
 
 - GM validation via password: protected entities (invisible), writing protection on entities/categories (non transitive) or whole storyline
     - not yet: sorting prohibited
 
-- tree-like music playlist system (just with category system) containing any supported service, enable user to move any sub-folder into playing tracks (no loose songs on root level)
-- multiple tracks for music, always only one playing but easy to switch (can be filled with temporary songs or saved songs from playlists)
-- search feature for all music services to add new songs (with listen to first 10s feature)
-- services: Youtube, Soundcloud, Spotify, Epidimicsound
-- noisli-like ambience noise feature in addition to music
+- music:
+    - tree-like music playlist system (just with category system) containing any supported service, enable user to move any sub-folder into playing tracks (no loose songs on root level)
+    - multiple tracks for music, always only one playing but easy to switch (can be filled with temporary songs or saved songs from playlists)
+    - search feature for all music services to add new songs
+    - option to split song into parts if possible (on youtube e.g via time stamps in the description)
+    - services: Youtube, Soundcloud, Spotify, Epidimicsound
+    - noisli-like ambience noise feature in addition to music
 
 - Board:
     - more instances

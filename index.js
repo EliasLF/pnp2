@@ -274,11 +274,11 @@ const Youtube = {
                     item.duration = Duration.parseClockFormat(item.duration);
                     if(!item.duration) continue;
 
-                    if(!item.thumbnail) item.thumnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
+                    if(!item.thumbnail) item.thumbnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
 
                     if(!item.author) item.author = {name:''};
                     for(let i in item.author){
-                        if(i != 'name' && i != 'ref') delete item[i];
+                        if(i != 'name' && i != 'ref') delete item.author[i];
                     }
 
                     item.contentId = item.link?.split('v=')[1];
@@ -296,7 +296,7 @@ const Youtube = {
                     item.length = parseInt(item.length);
                     if(!item.length) continue;
 
-                    if(!item.thumbnail) item.thumnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
+                    if(!item.thumbnail) item.thumbnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
 
                     if(!item.author) item.author = {name:''};
                     for(let i in item.author){
@@ -321,16 +321,16 @@ const Youtube = {
         let item = await ytdl.getBasicInfo(videoId);
         if(!item.title) throw new Error('no title found for video');
 
-        data.duration = parseInt(data.length_seconds);
+        item.duration = parseInt(item.length_seconds);
         if(!item.duration) throw new Error('invalid duration');
 
-        item.thumnail = item.playerResponse?.videoDetails?.thumbnail?.thumbnails?.[0]?.url; // 0 for lowest quality
-        if(!item.thumbnail) item.thumnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
+        item.thumbnail = item.playerResponse?.videoDetails?.thumbnail?.thumbnails?.[0]?.url; // 0 for lowest quality
+        if(!item.thumbnail) item.thumbnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
 
         if(!item.author) item.author = {name:''};
         if(item.author.channel_url) item.author.ref = item.author.channel_url;
         for(let i in item.author){
-            if(i != 'name' && i != 'ref') delete item[i];
+            if(i != 'name' && i != 'ref') delete item.author[i];
         }
 
         item.contentId = item.video_id;
@@ -355,11 +355,11 @@ const Youtube = {
             item.duration = Duration.parseClockFormat(item.duration);
             if(!item.duration) continue;
 
-            if(!item.thumbnail) item.thumnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
+            if(!item.thumbnail) item.thumbnail = 'https://i.ytimg.com/vi/invalid/hqdefault.jpg';
 
             if(!item.author) item.author = {name:''};
             for(let i in item.author){
-                if(i != 'name' && i != 'ref') delete item[i];
+                if(i != 'name' && i != 'ref') delete item.author[i];
             }
 
             item.contentId = item.id;
@@ -445,8 +445,14 @@ class Queue {
         if(Queue.nextId >= Number.MAX_SAFE_INTEGER) Queue.nextId = 0;
         objectSets.Queue.set(this.id, this);
         this.name = name;
-        this.songs = songs; // contains actual objects
+        this.songs = songs ?? []; // contains actual object references
         this.currentSong = null;
+    }
+
+    removeSong(song){
+        this.songs.splice(this.songs.indexOf(song), 1);
+        objectSets.Song.delete(song.id);
+        io.emit('music_updateQueue_'+this.id,{songs: this.songs.map(x => x.id)});
     }
 
     addSongs(songs){
@@ -466,6 +472,7 @@ class Queue {
 
         if(settings.autoclean && this.songs.length > 1){
             this.songs.splice(index, 1);
+            io.emit('music_updateQueue_'+this.id,{songs: this.songs.map(x => x.id)});
         }
         else index++;
 
@@ -534,7 +541,11 @@ class Song {
 
     getStream(){
         if(this.service === 'YouTube'){
-            return ytdl('https://www.youtube.com/watch?v='+this.contentId, { filter: 'audioonly' });
+            return ytdl('https://www.youtube.com/watch?v='+this.contentId, {
+                filter: 'audioonly',
+                quality: 'lowestaudio',
+                highWaterMark: 10485760 // buffer size: 10 megabytes
+            });
         }
         else{
             return null;
@@ -570,7 +581,7 @@ class Song {
             
             let ytData;
             try{
-                ytData = await Youtube.videoInfo(contentId);
+                ytData = await Youtube.videoInfo(url);
             }
             catch(e){
                 throw 'Unable to fetch video meta data. Error: '+e.stack;
@@ -625,6 +636,8 @@ var discord = {
                 promises.push(this.initUser(memberId));
             }
             await Promise.all(promises);
+
+            this.music.checkStreamHealth();
     
             this.ready();
         },
@@ -645,7 +658,7 @@ var discord = {
         },
     
         music: {
-            currentQueue: new Queue('Default', []), // TODO: change intial queue
+            currentQueue: new Queue('Default'),
             currentSong: null,
             playing: false,
             startedPlayingFrom: 0,
@@ -654,6 +667,8 @@ var discord = {
             dispatcher: null,
             stream: null,
             lastVoiceChannel: null,
+            streamHealthLastTimestamp: null,
+            streamHealthCheckingPause: false,
     
             settings: {
                 autoplay: true,
@@ -662,6 +677,40 @@ var discord = {
                 autoclean: false,
                 shuffle: false
             },
+
+            async checkStreamHealth(){
+                if(this.playing && !this.streamHealthCheckingPause){
+                    let timestamp = await this.getCurrentPostion();
+                    if(this.streamHealthLastTimestamp == timestamp){
+                        console.error('stream died -> restart from ', this.streamHealthLastTimestamp);
+                        // stream died -> restart from last timestamp
+                        await this.destroyDispatcher();
+                        this.play(this.streamHealthLastTimestamp);
+                    }
+                    this.streamHealthLastTimestamp = timestamp;
+                }
+                setTimeout(()=>this.checkStreamHealth(), 3000);
+            },
+
+
+            abortPauseStreamHealthChecking: ()=>{},
+
+            pauseStreamHealthChecking(duration=60){
+                // duration in seconds
+
+                this.abortPauseStreamHealthChecking();
+                this.streamHealthCheckingPause = true;
+
+                let aborted = false;
+                this.abortPauseStreamHealthChecking = ()=>{
+                    aborted = true;
+                }
+
+                setTimeout(()=>{
+                    if(!aborted) this.streamHealthCheckingPause = false;
+                }, duration * 1000);
+            },
+
     
             async joinVoiceChannel(msg){
                 await this.onready;
@@ -676,8 +725,8 @@ var discord = {
                     }
                 }
                 // else join the same voice channel as the author of the message
-                else if(!msg.guild.voice || !msg.guild.voice.channel || !this.voiceConnection){
-                    if(!msg.member.voice || !msg.member.voice.channel){
+                else if(!msg.guild?.voice || !this.voiceConnection){
+                    if(!msg.member?.voice){
                         msg.channel.send('The bot is currently not in a Voice Channel. Please first join a voice channel to indicate where the bot should join.');
                         return false;
                     }
@@ -701,16 +750,24 @@ var discord = {
             async play(position=0){
                 // postion in seconds
                 await this.onready;
-                if(this.currentQueue.songs.length === 0 || !(await this.getVoiceConnection())) return false; // unable to play (mo songs or no voice connection)
+                if(this.currentQueue.songs.length === 0 || !(await this.getVoiceConnection())){
+                    console.error('unable to play (no songs or no voice connection)', this.currentQueue.songs.length, await this.getVoiceConnection());
+                    return false; // unable to play (no songs or no voice connection)
+                }
                 if(await this.getDispatcher()) return await this.resume(); // if already playing nothing to do
     
+                this.pauseStreamHealthChecking();
+
                 if(!this.currentSong){ // if no current song, take first song of current queue
                     this.currentSong = this.currentQueue.currentSong = this.currentQueue.songs[0];
                     io.emit('music_currentSong',this.currentSong.id);
                 }
                 let stream = this.currentSong.getStream();
                 
-                this.dispatcher = (await this.getVoiceConnection()).play(stream, {seek: position});
+                this.dispatcher = (await this.getVoiceConnection()).play(stream, {
+                    seek: position,
+                    highWaterMark: 48
+                });
                 this.playing = true;
                 this.startedPlayingFrom = position;
                 io.emit('music_playing',true);
@@ -873,8 +930,7 @@ var discord = {
                     }
                 }
 
-                song.queue.songs.splice(song.queue.songs.indexOf(song), 1);
-                objectSets.Song.delete(songId);
+                song.queue.removeSong(song);
             },
 
             async removeQueue(queueId){
@@ -885,7 +941,7 @@ var discord = {
                 let queue = objectSets.Queue.get(queueId);
                 if(!queue) return false;
 
-                if(this.currentSong.queue == queue){
+                if(this.currentSong?.queue == queue){
                     await this.destroyDispatcher();
 
                     objectSets.Queue.delete(queueId);
@@ -907,8 +963,13 @@ var discord = {
                     objectSets.Queue.delete(queueId);
                 }
 
-                socket.emit('music_removeQueue', queueId);
+                io.emit('music_removeQueue_'+queueId);
                 return true;
+            },
+
+            addQueue(name){
+                let queue = new Queue(name);
+                io.emit('music_addQueue', queue.getData());
             },
 
             async clearQueue(queueId){
@@ -917,7 +978,7 @@ var discord = {
                 let queue = objectSets.Queue.get(queueId);
                 if(!queue) return false;
 
-                if(this.currentSong.queue == queue){
+                if(this.currentSong?.queue == queue){
                     await this.destroyDispatcher();
                     this.playing = false;
                     io.emit('music_playing',false);
@@ -945,7 +1006,7 @@ var discord = {
                 let songObjs = [];
                 for(let song of songs){
                     if('service' in song && 'contentId' in song && 'name' in song && 'author' in song && 'thumbnail' in song && 'duration' in song && 'name' in song.author)
-                        songObjs.push(new Song(queue, song.service, song.contentId, song.name, song.author, song.thumnail, song.duration));
+                        songObjs.push(new Song(queue, song.service, song.contentId, song.name, song.author, song.thumbnail, song.duration));
                 }
 
                 queue.addSongs(songObjs);
@@ -1074,8 +1135,8 @@ Original discord message: <a href="${url}">${url}</a>`
 }
 
 discord.client.on('message', async function(msg){
-    if(msg.content.startsWith('Ann:')){//msg.mentions.everyone && msg.content.startsWith('@everyone')){ // announcement
-        let text = msg.content;//.substring(9);
+    if(msg.mentions.everyone && msg.content.startsWith('@everyone')){ // announcement
+        let text = msg.content.substring(9);
         // read initialized users from MongoDB (only use those with notification settings)
         let users = await mongodb.collection('DiscordUser').find().toArray();
         for(let i=0; i<users.length; i++){
@@ -1174,6 +1235,9 @@ discord.client.on('message', async function(msg){
                         let firstSongId = await discord.server.music.addURL(discord.server.music.currentQueue.id, args[1]);
                         if(args[0] == 'play'){
                             if(!(await discord.server.music.joinVoiceChannel(msg))) break;
+                            // for some reason it does not play without this delay
+                            // (altough everything is loaded and some stream is retrieved, somehow the song seems to be not ready to produce a *healthy* stream immediatelly)
+                            await sleep(1500);
                             await discord.server.music.playSong(firstSongId);
                         }
                     }
@@ -1234,7 +1298,7 @@ discord.client.on('message', async function(msg){
             break;
 
             case 'info':
-                reply = (
+                msg.channel.send(
                     'Playing: **' + (discord.server.music.playing?'yes':'no') + 
                     '**\nAutoplay: **' + (discord.server.music.settings.autoplay?'on':'off') + 
                     '**\nWrapping around: **' + (discord.server.music.settings.wrapAround?'on':'off') + 
@@ -1245,8 +1309,7 @@ discord.client.on('message', async function(msg){
             break;
             
             case 'queue': case 'playlist': case 'list':
-                if(!reply) reply = '';
-                reply += 'Queue:\n';
+                reply = 'Queue:\n';
                 if(!discord.server.music.currentQueue?.songs?.length) reply += '   *empty*'
                 else for(let i in discord.server.music.currentQueue.songs){
                     reply += `${discord.server.music.currentQueue.songs[i] == discord.server.music.currentSong ? ' ▸':'     '} ${parseInt(i)+1}. ${
@@ -1570,7 +1633,7 @@ io.on('connection', async (socket) => {
     // MUSIC CALLS:
     {
         socket.on('music_requestServerInfo', () => {
-            socket.emit('music_serveSettings', {
+            socket.emit('music_serveServerInfo', {
                 currentSong: discord.server.music.currentSong?.id,
                 currentQueue: discord.server.music.currentQueue?.id,
                 playing: discord.server.music.playing,
@@ -1628,6 +1691,8 @@ io.on('connection', async (socket) => {
 
         socket.on('music_moveSong', (songId, newIndex) => discord.server.music.moveSong(songId, newIndex));
 
+        socket.on('music_addQueue', (name) => discord.server.music.addQueue(name));
+
         socket.on('music_addSongs', (queueId, ...songs) => discord.server.music.addSongs(queueId, songs));
 
         socket.on('music_addURL', async (queueId, url) => {
@@ -1641,6 +1706,8 @@ io.on('connection', async (socket) => {
         });
 
         socket.on('music_removeSong', (songId) => discord.server.music.removeSong(songId));
+
+        socket.on('music_clearQueue', (queueId) => discord.server.music.clearQueue(queueId));
 
         socket.on('music_renameQueue', (queueId, newName) => objectSets.Queue.get(queueId)?.rename(newName));
 
@@ -1658,10 +1725,11 @@ io.on('connection', async (socket) => {
 
         socket.on('music_requestSong', (songId) => {
             let song = objectSets.Song.get(songId);
-            if(song) socket.emit('music_serveSong_'+id, song.getData());
+            if(song) socket.emit('music_serveSong_'+songId, song.getData());
         });
 
         socket.on('music_searchYoutube', async (id, phrase, options) => {
+            // id: an arbitrary but unique id to identify the search request
             // options: type: 'video' | 'playlist', nextpageRef, limit
             if(!options) options = {};
             if(!options.limit) options.limit = 25;

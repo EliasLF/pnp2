@@ -16,6 +16,7 @@
     --backgrnd-color5-hover: rgb(125,125,125);
     --backgrnd-color6: rgb(105,105,105);
     --backgrnd-color6-hover: rgb(95,95,95);
+    --backgrnd-color-current-song: #7d7dff;
     --border-highlight-level1: #777;
     --border-highlight-level2: #999;
     --border-highlight-level3: #bbb;
@@ -41,6 +42,7 @@
     --backgrnd-color5-hover: rgb(75,75,75);
     --backgrnd-color6: rgb(80,80,80);
     --backgrnd-color6-hover: rgb(85,85,85);
+    --backgrnd-color-current-song: #2b2b50;
     --border-highlight-level1: #777;
     --border-highlight-level2: #555;
     --border-highlight-level3: #333;
@@ -251,12 +253,12 @@ code{
     object-fit: contain;
 }
 
-#image_menu{
+#image_menu, #music_add_menu{
     overflow: auto;
     margin-top: 30px;
 }
 
-.image_menu_wrapper {
+.image_menu_wrapper, .music_add_menu_wrapper {
     display: grid;
     grid-template-rows: auto 1fr auto;
     height: 100%;
@@ -272,11 +274,11 @@ code{
     cursor: pointer;
 }
 
-.image_menu_wrapper h3{
+.image_menu_wrapper h3, .music_add_wrapper h3{
     margin: 0 0 10px 0;
 }
 
-.image_menu_search_input{
+.image_menu_search_input, .music_add_search_input{
     margin-right: 10px;
 }
 
@@ -646,14 +648,15 @@ code{
 }
 
 
-
+#music_player{
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+}
 
 #music_menu{
     background-color: var(--backgrnd-color4)!important;
     padding: 10px !important;
-    max-width: 700px;
-    margin-left: auto;
-    margin-right: auto;
     text-align: center;
     cursor: default;
 }
@@ -709,29 +712,59 @@ code{
     overflow: hidden;
 }
 
+#music_queue_controls .icon{
+    margin-left: 5px;
+    width: 18px;
+    vertical-align: -4px;
+    cursor: pointer;
+    opacity: 0.8;
+}
+
 #songlist{
     margin-top: 10px;
 }
 
 .song{
     padding: 10px !important;
-    max-width: 700px;
-    margin-left: auto;
-    margin-right: auto;
     display: grid;
     grid-template: 
         "a b e" auto
         "a c e" auto
         "a d e" auto / auto 1fr auto;
     background-color: var(--backgrnd-color2)!important;
+    text-align: left;
+    color: var(--font-color);
 }
 
 .song:hover{
     background-color: var(--backgrnd-color2-hover)!important;
 }
 
+.song a{
+    position: relative;
+}
+
+#music_add_menu .song{
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.playlist_length{
+    display: inline-block;
+    position: absolute;
+    right: 0;
+    height: 60px;
+    width: 50px;
+    line-height: 60px;
+    text-align: center;
+    font-size: 15px;
+    font-weight: bold;
+    background-color: rgba(0,0,0,0.9);
+}
+
 #current_song{
-    background-color: var(--backgrnd-color3)!important;
+    background-color: var(--backgrnd-color-current-song)!important;
 }
 
 .song a{
@@ -772,6 +805,7 @@ code{
     height: 20px;
     filter: opacity(75%);
     cursor: pointer;
+    filter: var(--icon-invert) var(--icon-brightness);
 }
 
 
