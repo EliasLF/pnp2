@@ -28,6 +28,10 @@ HTMLElement.prototype.removeFromParent = function(){
 	this.parentNode?.removeChild(this);
 }
 Object.defineProperty(HTMLElement.prototype, "removeFromParent", {enumerable: false});
+HTMLElement.prototype.replace = function(newNode){
+	this.parentNode?.replaceChild(newNode, this);
+}
+Object.defineProperty(HTMLElement.prototype, "replace", {enumerable: false});
 
 Array.prototype.equals = function (array) {
     if (!array) return false;
@@ -123,6 +127,14 @@ function randomString(length=40){
     for(let i=0; i<length; i++) arr.push(chars[Math.floor(Math.random()*chars.length)]);
     return arr.join('');
 }
+
+const Duration = {
+    toClockFormat(seconds){
+        seconds = Math.round(seconds);
+        if(seconds >= 3600) return Math.floor(seconds/3600) + ':' + Math.floor((seconds % 3600)/60).toString().padStart(2,'0') + ':' + (seconds % 60).toString().padStart(2,'0');
+        else return Math.floor(seconds/60) + ':' + (seconds % 60).toString().padStart(2,'0');
+    }
+};
 
 
 function parseMarkup(string){
@@ -1266,6 +1278,7 @@ class Song {
         this.name = data?.title ?? 'loading...';
         this.duration = data?.duration;
         this.author = data?.author ?? {};
+        this.timestamps = data?.timestamps ?? [];
 
         this.dom = {};
         this.dom.root = document.createNode('div', {
@@ -1279,7 +1292,7 @@ class Song {
                 else socket.emit('music_playSong',this.id);
             }
         });
-        this.dom.thumbnailLink = this.dom.root.appendChild(document.createNode('div', {className:'song_thumbnail non_selectable'}))
+        this.dom.thumbnailLink = this.dom.root.appendChild(document.createNode('div', {className:'song_thumbnail non_selectable', onclick:e=>e.stopPropagation()}))
             .appendChild(document.createNode('a', {target:'_blank', href:(this.service == 'YouTube')?('https://www.youtube.com/watch?v='+this.contentId):''}));
         this.dom.thumbnailImg = this.dom.thumbnailLink.appendChild(document.createNode('img', {
             loading: 'lazy',
@@ -1301,12 +1314,14 @@ class Song {
 
     getData(){
         return {
+            id: this.id,
             service: this.service,
             contentId: this.contentId,
-            thumbnail: this.thumbnail,
             name: this.name,
+            author: this.author,
+            thumbnail: this.thumbnail,
             duration: this.duration,
-            author: this.author
+            timestamps: this.timestamps
         };
     }
 
@@ -1321,6 +1336,7 @@ class Song {
             this.name = data.name;
             this.duration = data.duration;
             this.author = data.author;
+            this.timestamps = data.timestamps ?? [];
 
             this.dom.thumbnailLink.href = (this.service == 'YouTube')?('https://www.youtube.com/watch?v='+this.contentId):'';
             this.dom.thumbnailImg.src = this.thumbnail;
@@ -1495,17 +1511,25 @@ var music = {
         else this.dom.player.menuButtons[setting].parentNode.classList.remove('active_button_wrapper');
     },
 
-    syncTime(){
-        if(!this.positionChanging && openPrimaryTab == 'music' && this.currentOpenTab == 'player'){
+    syncTime(noRecursion, force){
+        if((this.server.playing || force) && !this.positionChanging && openPrimaryTab == 'music' && this.currentOpenTab == 'player'){
             if(!this.server.currentSong) this.dom.player.position.value = MUSIC_POSITION_PRECISION;
             else{
                 let value = this.server.time/this.server.currentSong.duration;
                 if(value > 1) value = 1;
                 this.dom.player.position.value = value;
+                this.dom.player.time.innerHTML = Duration.toClockFormat(this.server.time);
+
+                if(this.server.currentSong.timestamps?.length){
+                    if(this.server.currentSong.timestamps[0] > this.server.time) this.dom.player.songSection.value = 0;
+                    this.dom.player.songSection.value = (this.server.currentSong.timestamps.findIndex(x => x.time > this.server.time) ?? this.server.currentSong.timestamps.length) - 1;
+                }
             }
+
+            if(!noRecursion && this.server.playing) this.server.time += 1;
         }
-        if(this.server.playing) this.server.time += 1;
-        setTimeout(()=>this.syncTime(), 1000 * MUSIC_POSITION_PRECISION);
+
+        if(!noRecursion) setTimeout(()=>this.syncTime(), 1000 * MUSIC_POSITION_PRECISION);
     },
 
     setCurrentSong(id){
@@ -1514,7 +1538,26 @@ var music = {
         this.server.currentQueue?.setPlaying(false);
         this.server.currentQueue = this.server.currentSong?.queue;
         this.server.currentQueue?.setPlaying(true);
-        if(this.server.currentSong) this.server.currentSong.dom.root.id = 'current_song';
+        if(this.server.currentSong){
+            this.server.currentSong.dom.root.id = 'current_song';
+            this.dom.player.duration.innerHTML = Duration.toClockFormat(this.server.currentSong.duration);
+            this.dom.player.time.innerHTML = '0:00';
+            this.dom.player.position.disabled = false;
+        }
+        else{
+            this.dom.player.duration.innerHTML = '';
+            this.dom.player.time.innerHTML = '';
+            this.dom.player.position.disabled = true;
+        }
+        if(this.server.currentSong?.timestamps?.length){
+            this.dom.player.songSectionWrapper.style.display = '';
+            this.dom.player.songSection.innerHTML = '';
+            for(let i in this.server.currentSong.timestamps)
+                this.dom.player.songSection.appendChild(document.createNode('option',{innerHTML:this.server.currentSong.timestamps[i].name, value:i}));
+        }
+        else{
+            this.dom.player.songSectionWrapper.style.display = 'none';
+        }
     },
 
     init(){
@@ -1572,6 +1615,15 @@ var music = {
                 }
             }));
         this.dom.player.duration = this.dom.player.positionWrapper.appendChild(document.createNode('div', {id: 'music_position_duration'}));
+
+        this.dom.player.songSectionWrapper = this.dom.player.menu.appendChild(document.createNode('div', {id: 'music_song_section', innerHTML:'Song section: '}));
+        this.dom.player.songSection = this.dom.player.songSectionWrapper.appendChild(document.createNode('select', {
+            onchange: ()=>{
+                let index = parseInt(this.dom.player.songSection.value);
+                if(this.server.currentSong?.timestamps?.[index] == undefined) return;
+                socket.emit('music_skipToTime', this.server.currentSong.timestamps[index].time);
+            }
+        }));
 
         this.dom.player.menuButtons.loop = this.dom.player.menu.appendChild(document.createNode('div', {
             className: 'button_wrapper', 
@@ -1675,7 +1727,10 @@ var music = {
             this.dom.player.queueSelect.value = this.openedQueue.id;
         });
 
-        socket.on('music_syncTime', time=>this.server.time = time);
+        socket.on('music_syncTime', time=>{
+            this.server.time = time;
+            this.syncTime(true, true);
+        });
 
         socket.emit('music_requestQueues');
     },
@@ -1850,6 +1905,7 @@ var music = {
         DOMCache.mainContent.innerHTML = '';
         if(tab == 'player'){
             DOMCache.mainContent.appendChild(this.dom.player.root);
+            this.syncTime(true, true);
         }
 
         else if(tab == 'noise'){
@@ -2584,6 +2640,36 @@ var game = {
     currentOpenTab: 'board',
 
     init(){
+        this.dom.board = {};
+        this.dom.board.root = document.createNode('div', {id:'board_wrapper',className:'content_section'});
+
+        this.dom.board.board = this.dom.board.root.appendChild(document.createNode('div', {id:'board'}));
+
+        this.dom.board.controlsWrapper = this.dom.board.root.appendChild(document.createNode('div', {id:'board_controls_wrapper'}));
+        this.dom.board.controls = this.dom.board.controlsWrapper.appendChild(document.createNode('div', {id:'board_controls'}));
+        this.dom.board.controls.appendChild(document.createNode('div', {id:'board_control_move_up', className:'board_control_move', innerHTML: '&#9650;'}));
+        this.dom.board.controls.appendChild(document.createNode('div', {id:'board_control_move_right', className:'board_control_move', innerHTML: '&#9654;'}));
+        this.dom.board.controls.appendChild(document.createNode('div', {id:'board_control_move_down', className:'board_control_move', innerHTML: '&#9660;'}));
+        this.dom.board.controls.appendChild(document.createNode('div', {id:'board_control_move_left', className:'board_control_move', innerHTML: '&#9664;'}));
+        this.dom.board.controls.appendChild(document.createNode('div', {id:'board_control_zoom_in', className:'board_control_zoom', innerHTML: '+'}));
+        this.dom.board.controls.appendChild(document.createNode('div', {id:'board_control_zoom_out', className:'board_control_zoom', innerHTML: '-'}));
+
+        this.dom.board.controls.appendChild(document.createNode('div', {id:'board_control_tool_select', className:'board_control_tool'}))
+            .appendChild(document.createNode('img', {src:'icons/cursor-select-move.png', className:'icon'}));
+        this.dom.board.controls.appendChild(document.createNode('div', {id:'board_control_tool_draw', className:'board_control_tool'}))
+            .appendChild(document.createNode('img', {src:'icons/draw.png', className:'icon'}));
+        this.dom.board.controls.appendChild(document.createNode('div', {id:'board_control_tool_erase', className:'board_control_tool'}))
+            .appendChild(document.createNode('img', {src:'icons/erase.png', className:'icon'}));
+        
+        this.dom.board.controls.appendChild(document.createNode('div', {id:'board_control_tool_color'}))
+            .appendChild(document.createNode('input', {type:'color'}));
+
+        this.dom.board.gameMoreWrapper = this.dom.board.controls.appendChild(document.createNode('div', {id:'board_control_game_more', innerHTML:'Game: '}));
+        this.dom.board.gameSelect = this.dom.board.gameMoreWrapper.appendChild(document.createNode('select'));
+        this.dom.board.gameMoreWrapper.appendChild(document.createNode('br'));
+        this.dom.board.gameMoreWrapper.appendChild(document.createNode('a', {innerHTML: '&#9656;More'}));
+
+
         this.dom.dice = {};
         this.dom.dice.root = document.createNode('div');
         this.dom.dice.root.appendChild(document.createNode('div',_,{marginBottom:'10px'}))
@@ -2798,6 +2884,7 @@ var game = {
         DOMCache.mainContent.innerHTML = '';
         if(tab == 'board'){
             DOMCache.widgets.classList.remove('widgets_edit');
+            DOMCache.mainContent.appendChild(this.dom.board.root);
         }
 
         else if(tab == 'dice'){
@@ -3003,7 +3090,10 @@ class Storyline {
                 if(!objectSets.StorylineInfoEntity.get(id)) newObjectInits.push((new StorylineInfoEntity(id, this)).init());
             }
             this.dom.generalInfo.innerHTML = '';
-            for(let x of this.getGeneralInfo()) this.dom.generalInfo.appendChild(x.dom.root);
+            for(let x of this.getGeneralInfo()){
+                x.parent = this;
+                this.dom.generalInfo.appendChild(x.dom.root);
+            }
         }
         if(data.info?.types && !this.info?.types?.equals(data.info.types)){
             this.info.types = data.info.types;
@@ -3011,7 +3101,10 @@ class Storyline {
                 if(!objectSets.StorylineInfoType.get(id)) newObjectInits.push((new StorylineInfoType(id, this)).init());
             }
             this.dom.menuTabs.storlineInfoTypes.innerHTML = '';
-            for(let type of this.getStorylineInfoTypes()) this.dom.menuTabs.storlineInfoTypes.appendChild(type.dom.menuTab);
+            for(let type of this.getStorylineInfoTypes()){
+                type.parent = this;
+                this.dom.menuTabs.storlineInfoTypes.appendChild(type.dom.menuTab);
+            }
         }
         
         if(data.players?.entities && !this.players?.entities?.equals(data.players.entities)){
@@ -3022,7 +3115,10 @@ class Storyline {
             }
             this.dom.menuTabs.players.innerHTML = '';
             let players = this.getPlayerEntities();
-            for(let player of players) this.dom.menuTabs.players.appendChild(player.dom.menuTab.root);
+            for(let player of players){
+                player.parent = this;
+                this.dom.menuTabs.players.appendChild(player.dom.menuTab.root);
+            }
             if(this.currentOpenPlayer && !players.includes(this.currentOpenPlayer)){
                 this.currentOpenPlayer = this.players.entities[0];
                 if(openPrimaryTab == 'players') this.openPlayer();
@@ -3295,7 +3391,7 @@ class Entity { // abstract
         
 
         this.dom.title = this.dom.root.appendChild(document.createNode('h3', {onclick: ()=>this.toggleOpen()}));
-        this.dom.foldArrow = this.dom.title.appendChild(document.createNode('span', {className:'fold_arrow non_selectable', innerHTML: String.fromCharCode(9654)}));
+        this.dom.foldArrow = this.dom.title.appendChild(document.createNode('span', {className:'fold_arrow non_selectable', innerHTML: '&#9654;'}));
         this.dom.name = this.dom.title.appendChild(document.createNode('span'));
 
         this.dom.main = this.dom.root.appendChild(document.createNode('div',_,{display: 'none', marginTop:'20px'}));
@@ -3361,7 +3457,7 @@ class Entity { // abstract
         if(!this.foldable) return;
         if(setValue == this.open) return;
         this.open = !this.open;
-        this.dom.foldArrow.innerHTML = this.open ? String.fromCharCode(9660) : String.fromCharCode(9654);
+        this.dom.foldArrow.innerHTML = this.open ? '&#9660;' : '&#9654;';
         this.dom.main.style.display = this.open ? '' : 'none';
     }
 
@@ -3751,6 +3847,7 @@ class PlayerEntity extends Entity {
         this.deleteMessages.push('With this also all subelements (items, skills, ...) will be deleted. Do you still want to proceed?');
 
         this.visible = !hiddenPlayers.has(this.id);
+        this.layoutMode = false;
 
         this.dom.icons.draggable.style.display = 'none';
 
@@ -3828,6 +3925,25 @@ class PlayerEntity extends Entity {
         }}));
 
         this.dom.cells = {};
+        this.dom.cells.layoutModeControlWrapper = document.createNode('div', {
+            className:'filter_bar',
+            onclick: ()=>{
+                this.layoutMode = !this.layoutMode;
+                if(this.layoutMode){
+                    this.dom.cells.root.id = 'layout_edit';
+                    this.dom.cells.layoutModeControl.src = 'icons/keyboard-return_on.png';
+                }
+                else{
+                    this.dom.cells.root.removeAttribute('id');
+                    this.dom.cells.layoutModeControl.src = 'icons/keyboard-return_off.png';
+                }
+            }
+        });
+        this.dom.cells.layoutModeControl = this.dom.cells.layoutModeControlWrapper.appendChild(document.createNode('img', {
+            className:'icon',
+            src: 'icons/keyboard-return_off.png'
+        }));
+
         this.dom.cells.root = document.createNode('div');
         this.dom.cells.categories = this.dom.cells.root.appendChild(document.createNode('div',{
             id:'PlayerEntity_'+this.id+'_cells_categories', 
@@ -3891,7 +4007,7 @@ class PlayerEntity extends Entity {
         this.sortables.entities = new Sortable.default([
             this.dom.items.entities, this.dom.itemEffects.entities, this.dom.cells.entities, this.dom.skills.entities, this.dom.notes.entities
         ], {
-            draggable: ".entity",
+            draggable: ".entity, .cell_br, .cell_hr",
             handle: '.drag_handle_entity',
             mirror: {
               constrainDimensions: true
@@ -3929,8 +4045,17 @@ class PlayerEntity extends Entity {
             if(!oldContainer.children) return console.error('old container not found',oldContainer,e);
             if(!newContainer.children) return console.error('new container not found',newContainer,e);
             
+            console.log(newContainer.children.join(','));
             oldContainer.children.splice(e.data.oldIndex,1);
             newContainer.children.splice(e.data.newIndex,0,entityId);
+
+            while(oldContainer.children[0] == 'br' || oldContainer.children[0] == 'hr') oldContainer.children.splice(0,1);
+            while(oldContainer.children[oldContainer.children.length-1] == 'br' || oldContainer.children[oldContainer.children.length-1] == 'hr') oldContainer.children.splice(-1,1);
+            while(newContainer.children[0] == 'br' || newContainer.children[0] == 'hr') newContainer.children.splice(0,1);
+            while(newContainer.children[newContainer.children.length-1] == 'br' || newContainer.children[newContainer.children.length-1] == 'hr') newContainer.children.splice(-1,1);
+
+
+            console.log(newContainer.children.join(','));
 
             if(oldContainer.subProperty){
                 oldContainer.update[oldContainer.property] = {};
@@ -3952,6 +4077,7 @@ class PlayerEntity extends Entity {
             styleRules.entityContainer.style.minHeight = '20px';
         });
         this.sortables.entities.on('sortable:stop', e => {
+            console.log(e.data.newContainer.id, e.data.oldContainer.id, e.data.newIndex, e.data.oldIndex);
             styleRules.entityContainer.style.minHeight = '';
             if(e.data.newContainer != e.data.oldContainer || e.data.newIndex != e.data.oldIndex){
                 saveNewOrder(e);
@@ -4038,7 +4164,10 @@ class PlayerEntity extends Entity {
                 if(!objectSets.ItemEntity.get(id)) newObjectInits.push((new ItemEntity(id, this, this.storyline, this)).init());
             }
             this.dom.items.entities.innerHTML = '';
-            for(let entity of this.getEntities('items')) this.dom.items.entities.appendChild(entity.dom.root);
+            for(let entity of this.getEntities('items')){
+                entity.parent = this;
+                this.dom.items.entities.appendChild(entity.dom.root);
+            }
         }
         if(data.items?.categories && !this.items?.categories?.equals(data.items.categories)){
             this.items.categories = data.items.categories;
@@ -4046,7 +4175,10 @@ class PlayerEntity extends Entity {
                 if(!objectSets.ItemCategory.get(id)) newObjectInits.push((new ItemCategory(id, this, this.storyline, this)).init());
             }
             this.dom.items.categories.innerHTML = '';
-            for(let categoriey of this.getCategories('items')) this.dom.items.categories.appendChild(categoriey.dom.root);
+            for(let category of this.getCategories('items')){
+                category.parent = this;
+                this.dom.items.categories.appendChild(category.dom.root);
+            }
         }
 
         if(data.itemEffects?.entities && !this.itemEffects?.entities?.equals(data.itemEffects.entities)){
@@ -4055,7 +4187,10 @@ class PlayerEntity extends Entity {
                 if(!objectSets.ItemEffectEntity.get(id)) newObjectInits.push((new ItemEffectEntity(id, this, this.storyline, this)).init());
             }
             this.dom.itemEffects.entities.innerHTML = '';
-            for(let entity of this.getEntities('itemEffects')) this.dom.itemEffects.entities.appendChild(entity.dom.root);
+            for(let entity of this.getEntities('itemEffects')){
+                entity.parent = this;
+                this.dom.itemEffects.entities.appendChild(entity.dom.root);
+            }
         }
         if(data.itemEffects?.categories && !this.itemEffects?.categories?.equals(data.itemEffects.categories)){
             this.itemEffects.categories = data.itemEffects.categories;
@@ -4063,7 +4198,10 @@ class PlayerEntity extends Entity {
                 if(!objectSets.ItemEffectCategory.get(id)) newObjectInits.push((new ItemEffectCategory(id, this, this.storyline, this)).init());
             }
             this.dom.itemEffects.categories.innerHTML = '';
-            for(let categoriey of this.getCategories('itemEffects')) this.dom.itemEffects.categories.appendChild(categoriey.dom.root);
+            for(let category of this.getCategories('itemEffects')){
+                category.parent = this;
+                this.dom.itemEffects.categories.appendChild(category.dom.root);
+            }
         }
 
         if(data.skills?.entities && !this.skills?.entities?.equals(data.skills.entities)){
@@ -4072,7 +4210,10 @@ class PlayerEntity extends Entity {
                 if(!objectSets.SkillEntity.get(id)) newObjectInits.push((new SkillEntity(id, this, this.storyline, this)).init());
             }
             this.dom.skills.entities.innerHTML = '';
-            for(let entity of this.getEntities('skills')) this.dom.skills.entities.appendChild(entity.dom.root);
+            for(let entity of this.getEntities('skills')){
+                entity.parent = this;
+                this.dom.skills.entities.appendChild(entity.dom.root);
+            }
         }
         if(data.skills?.categories && !this.skills?.categories?.equals(data.skills.categories)){
             this.skills.categories = data.skills.categories;
@@ -4080,7 +4221,10 @@ class PlayerEntity extends Entity {
                 if(!objectSets.SkillCategory.get(id)) newObjectInits.push((new SkillCategory(id, this, this.storyline, this)).init());
             }
             this.dom.skills.categories.innerHTML = '';
-            for(let categoriey of this.getCategories('skills')) this.dom.skills.categories.appendChild(categoriey.dom.root);
+            for(let category of this.getCategories('skills')){
+                category.parent = this;
+                this.dom.skills.categories.appendChild(category.dom.root);
+            }
         }
 
         if(data.notes?.entities && !this.notes?.entities?.equals(data.notes.entities)){
@@ -4089,7 +4233,10 @@ class PlayerEntity extends Entity {
                 if(!objectSets.NoteEntity.get(id)) newObjectInits.push((new NoteEntity(id, this, this.storyline, this)).init());
             }
             this.dom.notes.entities.innerHTML = '';
-            for(let entity of this.getEntities('notes')) this.dom.notes.entities.appendChild(entity.dom.root);
+            for(let entity of this.getEntities('notes')){
+                entity.parent = this;
+                this.dom.notes.entities.appendChild(entity.dom.root);
+            }
         }
         if(data.notes?.categories && !this.notes?.categories?.equals(data.notes.categories)){
             this.notes.categories = data.notes.categories;
@@ -4097,22 +4244,44 @@ class PlayerEntity extends Entity {
                 if(!objectSets.NoteCategory.get(id)) newObjectInits.push((new NoteCategory(id, this, this.storyline, this)).init());
             }
             this.dom.notes.categories.innerHTML = '';
-            for(let categoriey of this.getCategories('notes')) this.dom.notes.categories.appendChild(categoriey.dom.root);
+            for(let category of this.getCategories('notes')){
+                category.parent = this;
+                this.dom.notes.categories.appendChild(category.dom.root);
+            }
         }
 
         if(data.cells?.entities && !this.cells?.entities?.equals(data.cells.entities)){
             this.cells.entities = data.cells.entities;
             this.dom.cells.entities.innerHTML = '';
-            for(let id of this.cells.entities){
+            for(let i in this.cells.entities){
+                let id = this.cells.entities[i];
                 if(id == 'br'){
-                    this.dom.cells.entities.appendChild(document.createNode('div',{className:'cell_br'}));
+                    this.dom.cells.entities.appendChild(document.createNode('div',{
+                        className:'cell_br',
+                        onclick: ()=>{
+                            if(!this.layoutMode) return;
+                            let newChildren = this.cells.entities.slice();
+                            newChildren[i] = 'hr';
+                            socket.emit('updateData', 'PlayerEntity', this.id, {cells:{entities: newChildren}});
+                        }
+                    }));
                 }
                 else if (id == 'hr'){
-                    this.dom.cells.entities.appendChild(document.createNode('div',{className:'cell_hr'}));
+                    this.dom.cells.entities.appendChild(document.createNode('div',{
+                        className:'cell_hr',
+                        onclick: ()=>{
+                            if(!this.layoutMode) return;
+                            let newChildren = this.cells.entities.slice();
+                            newChildren.splice(parseInt(i), 1);
+                            socket.emit('updateData', 'PlayerEntity', this.id, {cells:{entities: newChildren}});
+                        }
+                    }));
                 }
                 else{
                     if(!objectSets.CellEntity.get(id)) newObjectInits.push((new CellEntity(id, this, this.storyline, this)).init());
-                    this.dom.cells.entities.appendChild(objectSets.CellEntity.get(id).dom.root);
+                    let entity = objectSets.CellEntity.get(id);
+                    entity.parent = this;
+                    this.dom.cells.entities.appendChild(entity.dom.root);
                 }
             }
         }
@@ -4122,7 +4291,10 @@ class PlayerEntity extends Entity {
                 if(!objectSets.CellCategory.get(id)) newObjectInits.push((new CellCategory(id, this, this.storyline, this)).init());
             }
             this.dom.cells.categories.innerHTML = '';
-            for(let categoriey of this.getCategories('cells')) this.dom.cells.categories.appendChild(categoriey.dom.root);
+            for(let category of this.getCategories('cells')){
+                category.parent = this;
+                this.dom.cells.categories.appendChild(category.dom.root);
+            }
         }
 
         await Promise.all(newObjectInits);
@@ -4162,6 +4334,7 @@ class PlayerEntity extends Entity {
         else{
             if(!this.dom[tab]) return;
             if(tab == 'skills') DOMCache.mainContent.appendChild(skillFilter);
+            else if(tab == 'cells') DOMCache.mainContent.appendChild(this.dom.cells.layoutModeControlWrapper);
             DOMCache.mainContent.appendChild(this.dom[tab].root);
         }
     }
@@ -4971,6 +5144,27 @@ class CellEntity extends Entity {
         }), this.dom.icons.draggable);
         this.dom.icons.widgetize.appendChild(document.createNode('img', {className: 'icon', src:'icons/widgetize.png'}));
 
+        this.dom.icons.linebreakWrapper = this.dom.root.appendChild(document.createNode('div', {
+            className: 'linebreak_icon',
+            onclick: ()=>{
+                if(parent == player){
+                    let index = parent.cells.entities.indexOf(this.id);
+                    if(parent.cells.entities[index] == undefined || parent.cells.entities[index+1] == 'br' || parent.cells.entities[index+1] == 'hr') return;
+                    let newChildren = parent.cells.entities.slice();
+                    newChildren.splice(index+1,0,'br');
+                    socket.emit('updateData', 'PlayerEntity', parent.id, {cells:{entities: newChildren}});
+                }
+                else{
+                    let index = parent.entities.indexOf(this.id);
+                    if(parent.entities[index] == undefined || parent.entities[index+1] == 'br' || parent.entities[index+1] == 'hr') return;
+                    let newChildren = parent.entities.slice();
+                    newChildren.splice(index+1,0,'br');
+                    socket.emit('updateData', 'CellCategory', parent.id, {entities: newChildren});
+                }
+            }
+        }));
+        this.dom.icons.linebreak = this.dom.icons.linebreakWrapper.appendChild(document.createNode('img', {className: 'icon', src:'icons/keyboard-return_off.png'}));
+
         this.dom.titleValue = this.dom.title.appendChild(document.createNode('div',{className: 'cell_title_value'}));
 
         this.dom.errorLabel = this.dom.grid.insertBefore(document.createNode('div',{innerHTML: 'Error:'}), this.dom.descriptionLabel);
@@ -5631,7 +5825,7 @@ class Category {
 
 
         this.dom.title = this.dom.head.appendChild(document.createNode('h3', {onclick: ()=>this.toggleOpen()}));
-        this.dom.foldArrow = this.dom.title.appendChild(document.createNode('span', {className:'fold_arrow non_selectable', innerHTML: String.fromCharCode(9654)}));
+        this.dom.foldArrow = this.dom.title.appendChild(document.createNode('span', {className:'fold_arrow non_selectable', innerHTML: '&#9654;'}));
         this.dom.name = this.dom.title.appendChild(document.createNode('span'));
 
         this.dom.body = this.dom.root.appendChild(document.createNode('div', {className: 'category_body'}));
@@ -5649,7 +5843,7 @@ class Category {
     toggleOpen(setValue){
         if(setValue == this.open) return;
         this.open = !this.open;
-        this.dom.foldArrow.innerHTML = this.open ? String.fromCharCode(9660) : String.fromCharCode(9654);
+        this.dom.foldArrow.innerHTML = this.open ? '&#9660;' : '&#9654;';
         this.dom.body.style.display = this.open ? '' : 'none';
     }
 
@@ -5696,11 +5890,39 @@ class Category {
 
         if(data.entities!=undefined && !this.entities?.equals(data.entities)){
             this.entities = data.entities;
-            for(let id of this.entities){
-                if(!objectSets[this.entityType.name].get(id)) newObjectInits.push((new this.entityType(id, this, this.storyline, this.player)).init());
-            }
+            
             this.dom.entities.innerHTML = '';
-            for(let entity of this.getEntities()) this.dom.entities.appendChild(entity.dom.root);
+            for(let i in this.entities){
+                let id = this.entities[i];
+                if(id == 'br'){
+                    this.dom.entities.appendChild(document.createNode('div',{
+                        className:'cell_br',
+                        onclick: ()=>{
+                            if(!this.player?.layoutMode) return;
+                            let newChildren = this.entities.slice();
+                            newChildren[i] = 'hr';
+                            socket.emit('updateData', 'CellCategory', this.id, {entities: newChildren});
+                        }
+                    }));
+                }
+                else if (id == 'hr'){
+                    this.dom.entities.appendChild(document.createNode('div',{
+                        className:'cell_hr',
+                        onclick: ()=>{
+                            if(!this.player?.layoutMode) return;
+                            let newChildren = this.entities.slice();
+                            newChildren.splice(parseInt(i), 1);
+                            socket.emit('updateData', 'CellCategory', this.id, {entities: newChildren});
+                        }
+                    }));
+                }
+                else{
+                    if(!objectSets[this.entityType.name].get(id)) newObjectInits.push((new this.entityType(id, this, this.storyline, this.player)).init());
+                    let entity = objectSets[this.entityType.name].get(id);
+                    entity.parent = this;
+                    this.dom.entities.appendChild(entity.dom.root);
+                }
+            }
         }
 
         if(data.categories!=undefined && !this.categories?.equals(data.categories)){
@@ -5709,7 +5931,10 @@ class Category {
                 if(!objectSets[this.type.name].get(id)) newObjectInits.push((new this.type(id, this, this.storyline, this.player ?? this.storylineInfoType)).init());
             }
             this.dom.categories.innerHTML = '';
-            for(let category of this.getCategories()) this.dom.categories.appendChild(category.dom.root);
+            for(let category of this.getCategories()){
+                category.parent = this;
+                this.dom.categories.appendChild(category.dom.root);
+            }
         }
 
         await Promise.all(newObjectInits);
@@ -6025,7 +6250,10 @@ class StorylineInfoType {
                 if(!objectSets.StorylineInfoEntity.get(id)) newObjectInits.push((new StorylineInfoEntity(id, this, this.storyline)).init());
             }
             this.dom.entities.innerHTML = '';
-            for(let entity of this.getEntities()) this.dom.entities.appendChild(entity.dom.root);
+            for(let entity of this.getEntities()){
+                entity.parent = this;
+                this.dom.entities.appendChild(entity.dom.root);
+            }
         }
 
         if(data.categories!=undefined && !this.categories?.equals(data.categories)){
@@ -6034,7 +6262,10 @@ class StorylineInfoType {
                 if(!objectSets.StorylineInfoCategory.get(id)) newObjectInits.push((new StorylineInfoCategory(id, this, this.storyline, this)).init());
             }
             this.dom.categories.innerHTML = '';
-            for(let category of this.getCategories()) this.dom.categories.appendChild(category.dom.root);
+            for(let category of this.getCategories()){
+                category.parent = this;
+                this.dom.categories.appendChild(category.dom.root);
+            }
         }
 
         await Promise.all(newObjectInits);
@@ -6316,20 +6547,8 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
 })();
 
 /* TODO/NOTES:
-- hr and br system break sortable (and maybe more!!)
-- widgets:
-    - saving
-    - setting to hide player names on health bar widgets
 - value syntax explanation
 - pwa install explanation
-- value system:
-    - handling br/hr entries (both empty divs with border or no border)
-    - compact mode on/off (toggling icon in filter bar)
-    - layout edit mode:
-        - started with icon in filter bar
-        - new line icon after every element -> adds new br
-        - every br gets dashed border and some padding (enables clicking) -> turns into hr
-        - hr on click removes it
 - transfering items
 - migrating old data
 - board system
@@ -6347,7 +6566,9 @@ ISSUES:
 
 PLANS:
 
-- copyright wall (with password one time entered -> saved as cookie (note that password is provided on discord in welcome channel))
+- widgets:
+    - saving
+    - setting to hide player names on health bar widgets
 - sync settings for discord user across devices (if turned on)
 - Undo/Redo (only for own changes (but also sabe also before if it is not equivalent to last step) and only for changed parameters, but always safe last state before going back in protocol 
   to enable complete redo, even if the last step originated in a change from outside)

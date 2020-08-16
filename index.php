@@ -1,3 +1,16 @@
+<?php
+if(!isset($_COOKIE["pnp_password"]) or $_COOKIE["pnp_password"]!='p&p'){
+	echo "<script>
+var psswd = prompt('For copyright reasons (since we are using a lot of external images here), this website has to be closed off from the public.\\nPlease enter the password provided in the welcome channel'+
+' of the discord server or ask me (Elias Foramitti) personally for it.');
+var d = new Date();
+d.setTime(d.getTime() + (5*365*24*60*60*1000));
+document.cookie = 'pnp_password=' + psswd + ';expires=' + d.toUTCString() + ';path=/elias/pnp';
+location.reload(true);
+</script>";
+die();
+}
+?>
 <!DOCTYPE html>
 <html>
 	<head>

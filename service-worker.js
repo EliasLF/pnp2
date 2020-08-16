@@ -57,6 +57,7 @@ var toBeCached = [ // different levels of versions staticness
         './icons/autoclean.png',
         './icons/autoplay.png',
         './icons/bin.png',
+        './icons/clear.png',
         './icons/cross.png',
         './icons/dice_distr.png',
         './icons/draggable.svg',

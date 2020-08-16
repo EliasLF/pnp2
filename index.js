@@ -257,6 +257,31 @@ function getURLParameters(url){
 }
 
 const Youtube = {
+    parseTimestamps(description){
+        if(!/\d:\d\d/.test(description)) return [];
+        let timestamps = [];
+        for(let line of description.split('\n')){
+            let match = line.match(/(\d+:)?\d+:\d\d/);
+            if(!match) continue;
+            let timestamp = {};
+            timestamp.time = Duration.parseClockFormat(match[0]);
+            if(match.index < (line.length - match[0].length)/2){ // timestamp is on the left side of line, e.g. '3:45 - Title of song'
+                timestamp.name = line.slice(match.index+match[0].length).trim();
+            }
+            else{ // timestamp is on the right side of line, e.g. 'Title of song, 3:45'
+                timestamp.name = line.slice(0, match.index).trim();
+            }
+            while(timestamp.name.startsWith('-') || timestamp.name.startsWith(',') || timestamp.name.startsWith(';') || timestamp.name.startsWith('|') || timestamp.name.startsWith(')'))
+                timestamp.name = timestamp.name.slice(1).trim();
+            while(timestamp.name.endsWith('-') || timestamp.name.endsWith(',') || timestamp.name.endsWith(';') || timestamp.name.endsWith('|') || timestamp.name.endsWith('('))
+                timestamp.name = timestamp.name.slice(0,-1).trim();
+            
+            timestamps.push(timestamp);
+        }
+        timestamps.sort((a,b) => a.time - b.time);
+        return timestamps;
+    },
+
     async search(searchPhrase, {type, nextpageRef, limit}){
         let data = await ytsr(searchPhrase, {limit, nextpageRef});
         if(!data?.items) return {items:[]};
@@ -336,8 +361,11 @@ const Youtube = {
         item.contentId = item.video_id;
         if(!item.contentId) throw new Error('invalid content id');
 
+        if(item.description) item.timestamps = this.parseTimestamps(item.description);
+        else item.timestamps = [];
+
         for(let i in item){
-            if(i != 'title' && i != 'contentId' && i != 'thumbnail' && i != 'author' && i != 'duration') delete item[i];
+            if(i != 'title' && i != 'contentId' && i != 'thumbnail' && i != 'author' && i != 'duration' && i != 'timestamps') delete item[i];
         }
         
         return item;
@@ -347,7 +375,8 @@ const Youtube = {
         let data = await ytpl(playlistId,{limit:Infinity});
         if(!data?.items) return [];
 
-        let items = [];
+        // more efficient, since no secondary call needed, but does not provide description for timestamp retrieval:
+        /*let items = [];
         for(let item of data.items){
             if(!item.title) continue;
 
@@ -369,66 +398,10 @@ const Youtube = {
                 if(i != 'title' && i != 'contentId' && i != 'thumbnail' && i != 'author' && i != 'duration') delete item[i];
             }
             items.push(item);
-        }
-        return items;
+            return items;
+        }*/
+        return await Promise.all(data.items.map(x => this.videoInfo(x.id)));
     }
-    /*async search(searchPhrase, type, pageToken){
-        //type: video, playlist or channel
-    
-        if(searchPhrase === undefined) throw 'search phrase missing';
-        let data = 'part=snippet&maxResults=25&key='+config.youtube.token+'&q='+encodeURIComponent(searchPhrase);
-        if(type) data += '&type='+encodeURIComponent(type);
-        if(pageToken) data += '&pageToken='+encodeURIComponent(pageToken);
-        let output = await fetch('https://www.googleapis.com/youtube/v3/search?'+data);
-        if(output.status != 200) return false;
-        output = await output.json();
-        if(output.error) throw `Youtube API Error: Code: ${output.error.code}; Reasons: ${errors.map(x => x.reason).join(', ')}` ;
-        else if(output.items[0]) return output;
-        return false;
-    },
-
-    chachedVideos: new Map(),
-
-    async videoInfo(videoId, part='snippet,contentDetails'){
-        if(videoId === undefined) throw 'video id missing';
-        if(this.chachedVideos.get(videoId)) return this.chachedVideos.get(videoId);
-        let data = 'part='+encodeURIComponent(part)+'&key='+config.youtube.token+'&id='+encodeURIComponent(videoId);
-        let output = await fetch('https://www.googleapis.com/youtube/v3/videos?'+data);
-        if(output.status != 200) return false;
-        output = await output.json();
-        if(output.error) throw `Youtube API Error: Code: ${output.error.code}; Reasons: ${errors.map(x => x.reason).join(', ')}` ;
-        else if(output.items[0]){
-            this.chachedVideos.set(videoId, output.items);
-            return output.items;
-        }
-        return false;
-    },
-
-    async playlistItems(playlistId, extendedInfo, pageToken, i){
-        if(playlistId === undefined) throw 'playlist id missing';
-        let data = 'part=snippet&maxResults=50&key='+config.youtube.token+'&playlistId='+encodeURIComponent(playlistId);
-        if(pageToken) data += '&pageToken='+encodeURIComponent(pageToken);
-        let output = await fetch('https://www.googleapis.com/youtube/v3/playlistItems?'+data);
-        if(output.status != 200) return false;
-        output = await output.json();
-        if(output.error) throw `Youtube API Error: Code: ${output.error.code}; Reasons: ${errors.map(x => x.reason).join(', ')}`;
-        if(extendedInfo && output.items){
-            let ids = output.items.map(x => x.snippet.resourceId.videoId);
-            let videos = await this.videoInfo(ids.join(','));
-            for(let video of videos){
-                let item = output.items[ids.indexOf(video.id)];
-                item.videoSnippet = video.snippet;
-                item.contentDetails = video.contentDetails;
-            }
-        }
-        if(i === undefined) i = 0;
-        if(output.nextPageToken && i<10){
-            let tmp = await this.playlistItems(playlistId, extendedInfo, output.nextPageToken, i++);
-            if(tmp) output.items = output.items.concat(tmp);
-        }
-        if(output.items[0]) return output.items;
-        return false;
-    }*/
 };
 
 var objectSets = {
@@ -525,7 +498,7 @@ class Queue {
 class Song {
     static nextId = 0;
 
-    constructor(queue, service, contentId, name, author, thumbnail, duration){
+    constructor(queue, service, contentId, name, author, thumbnail, duration, timestamps){
         this.id = Song.nextId++;
         if(Song.nextId >= Number.MAX_SAFE_INTEGER) Song.nextId = 0;
         objectSets.Song.set(this.id, this);
@@ -536,7 +509,8 @@ class Song {
         this.name = name; // string
         this.author = author; // {name[, ref(url to author)]}
         this.thumbnail = thumbnail; // string url
-        this.duration = duration; // number, seconds
+        this.duration = duration; // number in seconds
+        this.timestamps = timestamps ?? []; // array of timestamp objects: {name, time<number in seconds>}
     }
 
     getStream(){
@@ -560,7 +534,8 @@ class Song {
             name: this.name,
             author: this.author,
             thumbnail: this.thumbnail,
-            duration: this.duration
+            duration: this.duration,
+            timestamps: this.timestamps
         };
     }
 
@@ -587,7 +562,7 @@ class Song {
                 throw 'Unable to fetch video meta data. Error: '+e.stack;
             }
             if(!ytData) throw 'Unable to fetch video meta data.';
-            return new Song(queue, 'YouTube', ytData.contentId, ytData.title, ytData.author, ytData.thumbnail, ytData.duration);
+            return new Song(queue, 'YouTube', ytData.contentId, ytData.title, ytData.author, ytData.thumbnail, ytData.duration, ytData.timestamps);
         }
 
         
@@ -610,7 +585,7 @@ class Song {
             if(!ytData) throw 'Unable to fetch playlist data.';
 
             for(let x of ytData){
-                songs.push(new Song(queue, 'YouTube', x.contentId, x.title, x.author, x.thumbnail, x.duration));
+                songs.push(new Song(queue, 'YouTube', x.contentId, x.title, x.author, x.thumbnail, x.duration, x.timestamps));
             }
         }
 
@@ -1954,9 +1929,17 @@ io.on('connection', async (socket) => {
             if(collection.endsWith('Category') || collection == 'StorylineInfoType'){
                 if(data.entities != undefined){
                     tmpData.entities = data.entities;
-                    if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => !Number.isInteger(x))){
-                        delete tmpData.entities;
-                        error('entities must be an array of numerical ids');
+                    if(collection.startsWith('Cell')){
+                        if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => x != 'br' && x != 'hr' && !Number.isInteger(x))){
+                            delete tmpData.entities;
+                            error('entities must be an array of numerical ids, \'br\', and/or \'hr\'');
+                        }
+                    }
+                    else{
+                        if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => !Number.isInteger(x))){
+                            delete tmpData.entities;
+                            error('entities must be an array of numerical ids');
+                        }
                     }
                 }
                 
@@ -2150,6 +2133,7 @@ io.on('connection', async (socket) => {
                 }
             }
             recursivePrepareMongoData(data);
+            if(!Object.keys(mongoData).length) return;
 
             await mongodb.collection(collection).updateOne({'_id':id}, {$set: mongoData});
             io.emit('updateData_'+collection+'_'+id, data);
@@ -2212,8 +2196,16 @@ io.on('connection', async (socket) => {
                     tmpData.entities = []; // children are copied afterwards
                 else if(data.entities == undefined) tmpData.entities = [];
                 else tmpData.entities = data.entities;
-                if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => !Number.isInteger(x)))
-                    return error('entities must be an array of numerical ids');
+                if(collection.startsWith('Cell')){
+                    if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => x != 'br' && x != 'hr' && !Number.isInteger(x))){
+                        return error('entities must be an array of numerical ids, \'br\', and/or \'hr\'');
+                    }
+                }
+                else{
+                    if(!Array.isArray(tmpData.entities) || tmpData.entities.some(x => !Number.isInteger(x))){
+                        return error('entities must be an array of numerical ids');
+                    }
+                }
                 
                 if(template?.categories && (!templateMask || (templateMask.categories ?? templateMaskDefault))) 
                     tmpData.categories = []; // children are copied afterwards
@@ -2479,16 +2471,29 @@ io.on('connection', async (socket) => {
                         // to keep order: save all previous promises and wait everytime before registering with parent until all others finished
                         let keepOrderPromises = [];
                         let childCollection = (collection == 'StorylineInfoType') ? 'StorylineInfoEntity' : (collection.slice(0,-8) + 'Entity');
-                        for(let templateId of template.entities) keepOrderPromises.push(addData(childCollection, _, {
-                            loose: collection == 'StorylineInfoType',
-                            playerId: playerId,
-                            parentId: id,
-                            template: templateId,
-                            templateChildKeepOrderPromises: keepOrderPromises.slice(),
-                            templateItemsIdMap,
-                            templateBuildItemsIdMap,
-                            templateItemPromises
-                        }));
+                        for(let templateId of template.entities) {
+                            if(templateId == 'br' || templateId == 'hr' ){
+                                keepOrderPromises.push(
+                                    (async ()=>{
+                                        await Promise.all(keepOrderPromises);
+                                        await mongodb.collection(collection).findOneAndUpdate(
+                                            {'_id':id},
+                                            {$push:{entities:templateId}}
+                                        );
+                                    })()
+                                );
+                            }
+                            else keepOrderPromises.push(addData(childCollection, _, {
+                                loose: collection == 'StorylineInfoType',
+                                playerId: playerId,
+                                parentId: id,
+                                template: templateId,
+                                templateChildKeepOrderPromises: keepOrderPromises.slice(),
+                                templateItemsIdMap,
+                                templateBuildItemsIdMap,
+                                templateItemPromises
+                            }));
+                        }
 
                         if(collection == 'ItemCategory' && templateItemPromises) templateItemPromises.push(...keepOrderPromises);
                     }
@@ -2536,16 +2541,31 @@ io.on('connection', async (socket) => {
                             let keepOrderPromises = [];
                             let childCollection = property == 'notes' ? 'NoteEntity' : property == 'items' ? 'ItemEntity' : property == 'skills' ? 'SkillEntity' : 
                                 property == 'cells' ? 'CellEntity' : 'ItemEffectEntity';
-                            for(let templateId of template[property].entities) keepOrderPromises.push(addData(childCollection, _, {
-                                loose: true,
-                                playerId: id,
-                                parentId: id,
-                                template: templateId,
-                                templateChildKeepOrderPromises: keepOrderPromises.slice(),
-                                templateItemsIdMap,
-                                templateBuildItemsIdMap: property == 'items',
-                                templateItemPromises: (property == 'items') ? itemPromises : undefined
-                            }));
+                            for(let templateId of template[property].entities) {
+                                if(templateId == 'br' || templateId == 'hr' ){
+                                    keepOrderPromises.push(
+                                        (async ()=>{
+                                            await Promise.all(keepOrderPromises);
+                                            let updates = {$push:{}};
+                                            updates.$push[property+'.entities'] = templateId;
+                                            await mongodb.collection(collection).findOneAndUpdate(
+                                                {'_id':id},
+                                                updates
+                                            );
+                                        })()
+                                    );
+                                }
+                                else keepOrderPromises.push(addData(childCollection, _, {
+                                    loose: true,
+                                    playerId: id,
+                                    parentId: id,
+                                    template: templateId,
+                                    templateChildKeepOrderPromises: keepOrderPromises.slice(),
+                                    templateItemsIdMap,
+                                    templateBuildItemsIdMap: property == 'items',
+                                    templateItemPromises: (property == 'items') ? itemPromises : undefined
+                                }));
+                            }
 
                             if(property == 'items' && templateItemPromises) templateItemPromises.push(...keepOrderPromises);
                         }

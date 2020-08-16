@@ -114,6 +114,21 @@ input[type=checkbox]{
     vertical-align: top;
 }
 
+input[type="color"] {
+    width: 16px;
+    height: 20px;
+    padding: 1px 2px;
+    border-radius: 5px;
+}
+
+.dark input[type="color"]:hover{
+    background-color: rgba(255,255,255,0.05);
+}
+
+.light input[type="color"]:hover{
+    background-color: rgba(0,0,0,0.1);
+}
+
 option{
     background-color: var(--backgrnd-color1);
 }
@@ -193,6 +208,27 @@ code{
 
 .entity_compact .widgetize_icon img{
     width: 13px!important;
+}
+
+.linebreak_icon{
+    position: absolute;
+    right: -30px;
+    top: 0;
+    cursor: pointer;
+    opacity: 0.6;
+    display: none;
+}
+
+#layout_edit .linebreak_icon{
+    display: initial;
+}
+
+.entity_compact:last-child .linebreak_icon {
+    display: none!important;
+}
+
+#layout_edit .entity_compact{
+    margin-right: 45px;
 }
 
 .map_icon{
@@ -376,8 +412,8 @@ code{
 
 .entity_compact{
     float: left;
-    margin-right: 15px!important;
-    margin-bottom: 15px!important;
+    margin-right: 15px;
+    margin-bottom: 15px;
 }
 
 .entity_error{
@@ -627,9 +663,23 @@ code{
     margin-bottom: 10px;
 }
 
+.filter_bar .icon{
+    cursor: pointer;
+}
+
 .cell_hr{
     border-bottom: 1px solid;
     margin-bottom: 15px;
+}
+
+#layout_edit .cell_br{
+    margin-bottom: 15px;
+    border-bottom: 1px dashed;
+    cursor: pointer;
+}
+
+#layout_edit .cell_hr{
+    cursor: pointer;
 }
 
 .cell_title_value{
@@ -695,7 +745,7 @@ code{
 #music_position_wrapper{
     margin: 10px 0;
     display: grid;
-    grid-template-columns: 50px 1fr 50px;
+    grid-template-columns: 75px 1fr 75px;
 }
 
 #music_position{
@@ -703,13 +753,19 @@ code{
 }
 
 #music_position_duration{
-    text-align: right;
+    text-align: left;
     overflow: hidden;
+    padding-left: 5px;
 }
 
 #music_position_time{
-    text-align: left;
+    text-align: right;
     overflow: hidden;
+    padding-right: 5px;
+}
+
+#music_song_section{
+    margin-bottom: 10px;
 }
 
 #music_queue_controls .icon{
@@ -717,7 +773,7 @@ code{
     width: 18px;
     vertical-align: -4px;
     cursor: pointer;
-    opacity: 0.8;
+    opacity: 0.65;
 }
 
 #songlist{
@@ -972,4 +1028,170 @@ code{
 
 .health_bar_right{
     background-color: var(--backgrnd-color6);
+}
+
+
+
+
+#board_wrapper{
+    display: grid;
+    grid-template: 
+        "board controls" auto / 1fr auto;
+    height: calc(100vh - 113px);
+    margin-bottom: 0;
+}
+
+#board{
+    grid-area: board;
+    background-color: lightblue;
+}
+
+#board_controls_wrapper{
+    grid-area: controls;
+    margin: auto 20px;
+}
+
+#board_controls{
+    display: grid;
+    grid-template: 
+        "a      up     b"      auto
+        "left   c      right"  auto
+        "d      down   e"      auto
+        "out    f      in"     auto
+        "select select g"      auto
+        "draw   draw   color"  auto
+        "erase  erase  h"      auto
+        "more   more   more"   auto / auto auto auto;
+    width: min-content;
+    margin: auto;
+}
+
+.board_control_move{
+    width: 20px;
+    height: 20px;
+    line-height: 20px;
+    font-size: 20px;
+    text-align: center;
+    cursor: pointer;
+}
+
+#board_control_move_up{
+    grid-area: up;
+    margin: auto auto 0 auto;
+}
+
+#board_control_move_down{
+    grid-area: down;
+    margin: 0 auto auto auto;
+}
+
+#board_control_move_left{
+    grid-area: left;
+    margin: auto 0 auto auto;
+}
+
+#board_control_move_right{
+    grid-area: right;
+    margin: auto auto auto 0;
+}
+
+.board_control_zoom{
+    margin: auto;
+    width: 15px;
+    height: 15px;
+    font-size: 15px;
+    text-align: center;
+    cursor: pointer;
+    border: 1px solid;
+    border-radius: 5px;
+    font-weight: bold;
+}
+
+#board_control_zoom_in{
+    grid-area: in;
+    line-height: 15px;
+}
+
+#board_control_zoom_out{
+    grid-area: out;
+    line-height: 12px;
+}
+
+.board_control_tool{
+    margin: 5px 2px 0 auto;
+    width: 25px;
+    height: 25px;
+    line-height: 25px;
+    text-align: center;
+    cursor: pointer;
+    border: 1px solid;
+    border-radius: 5px;
+    font-weight: bold;
+}
+
+#board_control_tool_select{
+    grid-area: select;
+    margin-top: 10px;
+}
+
+#board_control_tool_draw{
+    grid-area: draw;
+}
+
+#board_control_tool_erase{
+    grid-area: erase;
+}
+
+#board_control_tool_color{
+    grid-area: color;
+    margin: 6.25px auto 0 auto;
+}
+
+#board_control_game_more{
+    grid-area: more;
+    margin: 10px auto 0 auto;
+    text-align: center;
+    line-height: 150%;
+}
+
+#board_control_game_more select{
+    width: 60px;
+}
+
+@media only screen and (orientation: portrait){
+    #board_wrapper{
+        display: grid;
+        grid-template: 
+            "controls" auto
+            "board" 1fr / auto;
+    }
+
+    #board_controls_wrapper{
+        margin: 20px auto;
+    }
+
+    #board_controls{
+        display: grid;
+        grid-template: 
+            "a    up   d     in  select draw  erase more" auto
+            "left c    right f   select draw  erase more" auto
+            "b    down e     out g      color h     more" auto / auto auto auto auto auto auto auto auto;
+    }
+
+    .board_control_tool{
+        margin: auto 0 2px 5px;
+    }
+
+    #board_control_tool_select{
+        margin-top: auto;
+        margin-left: 10px;
+    }
+
+    #board_control_game_more{
+        margin: auto 0 auto 10px;
+    }
+
+    #board_control_tool_color{
+        margin: auto 0 auto 7.5px;
+    }
 }
