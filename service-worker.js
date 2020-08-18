@@ -39,7 +39,7 @@ var toBeCached = [ // different levels of versions staticness
     [   // can change with every version (e.g. 2.0.5 -> 2.0.6)
         /*'./',
         './main.js',
-        './main.css'*/ // TODO: uncomment
+        './main.css'*/
     ],
     [   // can change only with every second level version (e.g. 2.0.5 -> 2.1.0)
         './fonts/opensans.css', 
@@ -59,9 +59,12 @@ var toBeCached = [ // different levels of versions staticness
         './icons/bin.png',
         './icons/clear.png',
         './icons/cross.png',
+        './icons/cursor-select-move.png',
         './icons/dice_distr.png',
         './icons/draggable.svg',
+        './icons/draw.png',
         './icons/edit.png',
+        './icons/erase.png',
         './icons/gift.png',
         './icons/hand.png',
         './icons/keyboard-return_on.png',
@@ -93,7 +96,7 @@ var toBeCached = [ // different levels of versions staticness
 
 var version = {
     current: [0,0,0],
-    delayUntilRecheck: 30000, // in milliseconds
+    delayUntilRecheck: 60000, // in milliseconds
     lastChecked: 0,
     async recheck(force, updateCache){
         if(!force && (new Date).getTime() - this.lastChecked < this.delayUntilRecheck) return false;
@@ -113,23 +116,22 @@ var version = {
     }
 };
 
-self.addEventListener('install', e=> {
-    e.waitUntil(async ()=>{
-        await caches.delete('pnp-v1');
-        await caches.open('pnp-v1').then(cache => {
-            version.recheck(true, false);
-            return cache.addAll(toBeCached.flat());
-        });
-    }
-        
-    );
+self.addEventListener('install', async e=> {
+    console.log('installed new service worker version');
+    await caches.delete('pnp-v1');
+    await caches.open('pnp-v1').then(cache => {
+        version.recheck(true, false);
+        cache.addAll(toBeCached.flat());
+    });
 });
+
 
 self.addEventListener('fetch', e=> {
     e.respondWith(
         caches.match(e.request).then(async response => {
-            if(await version.recheck(false, true)){
-                console.log('new version: ',version.current);
+            let oldVersion = version.current;
+            if(response && await version.recheck(false, true)){
+                console.log('new version: ',oldVersion,version.current);
                 return await fetch(e.request);
             }
             return await (response || fetch(e.request));

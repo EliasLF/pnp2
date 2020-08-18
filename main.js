@@ -1282,7 +1282,7 @@ class Song {
 
         this.dom = {};
         this.dom.root = document.createNode('div', {
-            className:'song content_section',
+            className:'song content_section non_selectable',
             onclick: e=>{
                 if(this.id == undefined){
                     e.stopPropagation();
@@ -1292,7 +1292,7 @@ class Song {
                 else socket.emit('music_playSong',this.id);
             }
         });
-        this.dom.thumbnailLink = this.dom.root.appendChild(document.createNode('div', {className:'song_thumbnail non_selectable', onclick:e=>e.stopPropagation()}))
+        this.dom.thumbnailLink = this.dom.root.appendChild(document.createNode('div', {className:'song_thumbnail', onclick:e=>e.stopPropagation()}))
             .appendChild(document.createNode('a', {target:'_blank', href:(this.service == 'YouTube')?('https://www.youtube.com/watch?v='+this.contentId):''}));
         this.dom.thumbnailImg = this.dom.thumbnailLink.appendChild(document.createNode('img', {
             loading: 'lazy',
@@ -1301,11 +1301,11 @@ class Song {
         this.dom.title = this.dom.root.appendChild(document.createNode('div', {className:'song_title', innerHTML:this.name}));
         this.dom.author = this.dom.root.appendChild(document.createNode('div', {className:'song_author', innerHTML:this.author.name}));
         this.dom.service = this.dom.root.appendChild(document.createNode('img', {
-            className:'song_service non_selectable', 
+            className:'song_service', 
             src: (this.service == 'YouTube')?'icons/youtube.png':undefined
         }));
         if(this.id != undefined){
-            this.dom.remove = this.dom.root.appendChild(document.createNode('img', {className:'song_remove non_selectable', src:'icons/cross.png', onclick: e=>{
+            this.dom.remove = this.dom.root.appendChild(document.createNode('img', {className:'song_remove', src:'icons/cross.png', onclick: e=>{
                 e.stopPropagation();
                 socket.emit('music_removeSong',this.id);
             }}));
@@ -1521,7 +1521,7 @@ var music = {
                 this.dom.player.time.innerHTML = Duration.toClockFormat(this.server.time);
 
                 if(this.server.currentSong.timestamps?.length){
-                    if(this.server.currentSong.timestamps[0] > this.server.time) this.dom.player.songSection.value = 0;
+                    if(this.server.currentSong.timestamps[0] >= this.server.time) this.dom.player.songSection.value = 0;
                     this.dom.player.songSection.value = (this.server.currentSong.timestamps.findIndex(x => x.time > this.server.time) ?? this.server.currentSong.timestamps.length) - 1;
                 }
             }
@@ -1551,12 +1551,38 @@ var music = {
         }
         if(this.server.currentSong?.timestamps?.length){
             this.dom.player.songSectionWrapper.style.display = '';
+            this.dom.player.positionSongSections.style.display = '';
             this.dom.player.songSection.innerHTML = '';
-            for(let i in this.server.currentSong.timestamps)
+            this.dom.player.positionSongSections.innerHTML = '';
+            let relativeTimestamps = [];
+            for(let i in this.server.currentSong.timestamps){
                 this.dom.player.songSection.appendChild(document.createNode('option',{innerHTML:this.server.currentSong.timestamps[i].name, value:i}));
+                if(relativeTimestamps[relativeTimestamps.length-1]?.time == this.server.currentSong.timestamps[i].time)
+                    relativeTimestamps[relativeTimestamps.length-1].name = this.server.currentSong.timestamps[i].name;
+                else relativeTimestamps.push({
+                    time: this.server.currentSong.timestamps[i].time, 
+                    relativeTime: this.server.currentSong.timestamps[i].time / this.server.currentSong.duration,
+                    name: this.server.currentSong.timestamps[i].name
+                });
+            }
+            if(relativeTimestamps[0].time != 0) relativeTimestamps.unshift({
+                time: 0, 
+                relativeTime:0,
+                name: ''
+            });
+            for(let i in relativeTimestamps){
+                i = parseInt(i);
+                this.dom.player.positionSongSections.appendChild(document.createNode('div', {
+                    title: relativeTimestamps[i].name,
+                    onclick: ()=>socket.emit('music_skipToTime', relativeTimestamps[i].time)
+                }, {
+                    width: (((relativeTimestamps[i+1]?.relativeTime ?? 1) - relativeTimestamps[i].relativeTime)*100) + '%'
+                }));
+            }
         }
         else{
             this.dom.player.songSectionWrapper.style.display = 'none';
+            this.dom.player.positionSongSections.style.display = 'none';
         }
     },
 
@@ -1594,26 +1620,28 @@ var music = {
 
         this.dom.player.positionWrapper = this.dom.player.menu.appendChild(document.createNode('div', {id: 'music_position_wrapper'}));
         this.dom.player.time = this.dom.player.positionWrapper.appendChild(document.createNode('div', {id: 'music_position_time'}));
-        this.dom.player.position = this.dom.player.positionWrapper.appendChild(document.createNode('div'))
-            .appendChild(document.createNode('input',{
-                type: 'range',
-                id: 'music_position',
-                min: 0,
-                max: 1,
-                step: 'any',
-                onmousedown: ()=>{this.positionChanging = true},
-                ontouchstart: ()=>{this.positionChanging = true},
-                onmouseup: ()=>{this.positionChanging = false},
-                ontouchend: ()=>{this.positionChanging = false},
-                onchange: ()=>{
-                    if(this.server.currentSong){
-                        let time = parseFloat(this.dom.player.position.value)*this.server.currentSong.duration;
-                        socket.emit('music_skipToTime', time);
-                        this.server.time = time;
-                    }
-                    else this.dom.player.position.value = 1;
+        this.dom.player.positionInnerWrapper = this.dom.player.positionWrapper.appendChild(document.createNode('div'));
+        this.dom.player.position = this.dom.player.positionInnerWrapper.appendChild(document.createNode('input',{
+            type: 'range',
+            id: 'music_position',
+            min: 0,
+            max: 1,
+            step: 'any',
+            onmousedown: ()=>{this.positionChanging = true},
+            ontouchstart: ()=>{this.positionChanging = true},
+            onmouseup: ()=>{this.positionChanging = false},
+            ontouchend: ()=>{this.positionChanging = false},
+            onchange: ()=>{
+                if(this.server.currentSong){
+                    let time = parseFloat(this.dom.player.position.value)*this.server.currentSong.duration;
+                    socket.emit('music_skipToTime', time);
+                    this.server.time = time;
                 }
-            }));
+                else this.dom.player.position.value = 1;
+            }
+        }));
+        this.dom.player.positionInnerWrapper.appendChild(document.createNode('br'));
+        this.dom.player.positionSongSections = this.dom.player.positionInnerWrapper.appendChild(document.createNode('div',{id:'music_position_song_sections'},{display:'none'}));
         this.dom.player.duration = this.dom.player.positionWrapper.appendChild(document.createNode('div', {id: 'music_position_duration'}));
 
         this.dom.player.songSectionWrapper = this.dom.player.menu.appendChild(document.createNode('div', {id: 'music_song_section', innerHTML:'Song section: '}));
@@ -1666,7 +1694,7 @@ var music = {
             }
         })).appendChild(document.createNode('img', {src: 'icons/autoplay.png'}));
 
-        this.dom.player.queueControls = this.dom.player.root.appendChild(document.createNode('div', {innerHTML:'Queue: ', id:'music_queue_controls'}))
+        this.dom.player.queueControls = this.dom.player.root.appendChild(document.createNode('div', {innerHTML:'Queue: ', id:'music_queue_controls', className:'non_selectable'}))
         this.dom.player.queueSelect = this.dom.player.queueControls.appendChild(document.createNode('select', {
             onchange:()=>this.openQueue(parseInt(this.dom.player.queueSelect.value))
         }));
@@ -4045,7 +4073,6 @@ class PlayerEntity extends Entity {
             if(!oldContainer.children) return console.error('old container not found',oldContainer,e);
             if(!newContainer.children) return console.error('new container not found',newContainer,e);
             
-            console.log(newContainer.children.join(','));
             oldContainer.children.splice(e.data.oldIndex,1);
             newContainer.children.splice(e.data.newIndex,0,entityId);
 
@@ -4054,8 +4081,6 @@ class PlayerEntity extends Entity {
             while(newContainer.children[0] == 'br' || newContainer.children[0] == 'hr') newContainer.children.splice(0,1);
             while(newContainer.children[newContainer.children.length-1] == 'br' || newContainer.children[newContainer.children.length-1] == 'hr') newContainer.children.splice(-1,1);
 
-
-            console.log(newContainer.children.join(','));
 
             if(oldContainer.subProperty){
                 oldContainer.update[oldContainer.property] = {};
@@ -4077,7 +4102,6 @@ class PlayerEntity extends Entity {
             styleRules.entityContainer.style.minHeight = '20px';
         });
         this.sortables.entities.on('sortable:stop', e => {
-            console.log(e.data.newContainer.id, e.data.oldContainer.id, e.data.newIndex, e.data.oldIndex);
             styleRules.entityContainer.style.minHeight = '';
             if(e.data.newContainer != e.data.oldContainer || e.data.newIndex != e.data.oldIndex){
                 saveNewOrder(e);
@@ -4598,12 +4622,20 @@ class ItemEntity extends Entity {
                 }
                 this.amount = value;
                 this.value = value;
+                if(!this.amount) this.dom.icons.transfer.style.display = 'none';
+                else if(this.dom.icons.transfer.style.display == 'none') this.dom.icons.transfer.style.display = '';
                 this.fireChangeEvent();
                 socket.emit('updateData','ItemEntity',this.id,{amount:value});
             },
             onclick: e=>e.stopPropagation()
         }), this.dom.name);
         this.dom.title.insertBefore(document.createTextNode(' '), this.dom.name);
+
+        this.dom.icons.transfer = this.dom.root.insertBefore(document.createNode('div', {
+            className: 'transfer_icon', 
+            onclick:()=>this.openTransferPopup()
+        }), this.dom.icons.delete);
+        this.dom.icons.transfer.appendChild(document.createNode('img', {className: 'icon', src:'icons/gift.png'}));
 
 
         this.editEffects = [];
@@ -4656,6 +4688,8 @@ class ItemEntity extends Entity {
             this.amount = data.amount;
             this.value = data.amount;
             this.dom.amount.value = this.amount;
+            if(!this.amount) this.dom.icons.transfer.style.display = 'none';
+            else if(this.dom.icons.transfer.style.display == 'none') this.dom.icons.transfer.style.display = '';
             this.fireChangeEvent();
         }
 
@@ -4777,6 +4811,84 @@ class ItemEntity extends Entity {
         }
 
         super.saveEdit(changed);
+    }
+
+    openTransferPopup(){
+        if(this.amount < 1) return;
+
+        var wrapper = document.createNode('div',{className:'add_popup_wrapper',onclick: e=> e.stopPropagation()});
+
+        wrapper.appendChild(document.createNode('h3',{
+            innerHTML: `Transfer '${this.name}'`
+        }));
+
+        let grid = wrapper.appendChild(document.createNode('div',{className:'add_popup_grid'}));
+        grid.appendChild(document.createNode('div',{innerHTML:'Amount:&nbsp;'}));
+        let amountInput = grid.appendChild(document.createNode('div')).appendChild(document.createNode('input',{
+            type: 'number',
+            value: 1,
+            min: 1,
+            step: 1,
+            max: this.amount,
+            onchange: ()=>{
+                let value = parseInt(amountInput.value);
+                if(value < 1 || !Number.isInteger(value)) return amountInput.value = 1;
+                if(value > this.amount) return amountInput.value = this.amount;
+            }
+        }));
+
+        var targetSelect = {};
+
+        grid.appendChild(document.createNode('div',{innerHTML:'Target:&nbsp;'}));
+        let targetSelectSection = grid.appendChild(document.createNode('div'));
+
+        targetSelect.player = targetSelectSection.appendChild(document.createNode('select', {onchange: ()=>{
+            targetSelect.element.innerHTML = '';
+            let player = objectSets.PlayerEntity.get(parseInt(targetSelect.player.value));
+            if(!player) return;
+            if(!player.item[this.referenceName]) targetSelect.element.appendChild(document.createNode('option',{innerHTML:'Create new',value:'none'}));
+            if(targetSelect.player.value != 'none' && targetSelect.player.value != ''){
+                for(let x of player.getAllDescendants('items')) targetSelect.element.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+                targetSelect.element.value = player.item[this.referenceName]?.id ?? 'none';
+            }
+        }}));
+
+        targetSelect.element = targetSelectSection.appendChild(document.createNode('select'));
+
+        for(let x of this.storyline.getPlayerEntities()) targetSelect.player.appendChild(document.createNode('option',{innerHTML:x.name,value:x.id}));
+        targetSelect.player.value = this.player.id;
+        targetSelect.player.onchange();
+
+
+        var commit = ()=>{
+            let amount = parseInt(amountInput.value);
+            if(!Number.isInteger(amount) || amount < 1) return alert('Please provide a positive integer amount.');
+            if(amount > this.amount) return alert('You can not transfer more instances of an item than you own.');
+
+            let target = targetSelect.element.value;
+            let player;
+
+            if(target == 'none'){
+                player = parseInt(targetSelect.player.value);
+                let playerObject = objectSets.PlayerEntity.get(player);
+                if(!playerObject) return alert('Player, in which new item should be created, not found.');
+            }
+            else{
+                target = parseInt(target);
+                let targetObject = objectSets.ItemEntity.get(target);
+                if(!targetObject) return alert('Target not found.');
+                if(targetObject.storyline != this.storyline) return alert('Target does not belong to this storyline.');
+            }
+
+            socket.emit('transferItem', amount, this.id, target, player);
+
+            popup.close();
+        }
+
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Transfer', className:'add_commit_button', onclick: ()=>commit()}));
+        wrapper.appendChild(document.createNode('button',{innerHTML: 'Cancel', className:'add_commit_button', onclick: ()=>popup.close()}));
+        
+        popup.open([wrapper]);
     }
 }
 
@@ -6549,7 +6661,6 @@ var exitEditBehaviour = localStorage.getItem('pnp_exit_edit');
 /* TODO/NOTES:
 - value syntax explanation
 - pwa install explanation
-- transfering items
 - migrating old data
 - board system
 - map system

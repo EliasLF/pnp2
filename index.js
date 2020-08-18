@@ -39,7 +39,7 @@ const mailTransport = require('nodemailer').createTransport({
 var mongodb;
 const MongoClient = require('mongodb').MongoClient;
 MongoClient.connect('mongodb://localhost:27017', {useNewUrlParser: true, useUnifiedTopology: true}, (err,client)=>{
-    if(err) console.error(err);
+    if(err) console.log('Error while connecting to MongoDB', err);
     else mongodb = client.db('pnp');
 });
 
@@ -67,7 +67,7 @@ mysql.safeConnect = function(connectionConfig) {
 
     this.connection.connect((err)=>{
         if(err){
-            console.error('Error while connecting to MySQL: ',err);
+            console.log('Error while connecting to MySQL: ',err);
             setTimeout(()=>this.safeConnect(connectionConfig), 2000);
         } 
         else{
@@ -271,9 +271,11 @@ const Youtube = {
             else{ // timestamp is on the right side of line, e.g. 'Title of song, 3:45'
                 timestamp.name = line.slice(0, match.index).trim();
             }
-            while(timestamp.name.startsWith('-') || timestamp.name.startsWith(',') || timestamp.name.startsWith(';') || timestamp.name.startsWith('|') || timestamp.name.startsWith(')'))
+            while(timestamp.name.startsWith('-') || timestamp.name.startsWith(',') || timestamp.name.startsWith(';') || timestamp.name.startsWith(':') || 
+            timestamp.name.startsWith('|') || timestamp.name.startsWith(')'))
                 timestamp.name = timestamp.name.slice(1).trim();
-            while(timestamp.name.endsWith('-') || timestamp.name.endsWith(',') || timestamp.name.endsWith(';') || timestamp.name.endsWith('|') || timestamp.name.endsWith('('))
+            while(timestamp.name.endsWith('-') || timestamp.name.endsWith(',') || timestamp.name.endsWith(';') || timestamp.name.endsWith(':') || 
+            timestamp.name.endsWith('|') || timestamp.name.endsWith('('))
                 timestamp.name = timestamp.name.slice(0,-1).trim();
             
             timestamps.push(timestamp);
@@ -309,8 +311,11 @@ const Youtube = {
                     item.contentId = item.link?.split('v=')[1];
                     if(!item.contentId) continue;
 
+                    if(item.description) item.timestamps = this.parseTimestamps(item.description);
+                    else item.timestamps = [];
+
                     for(let i in item){
-                        if(i != 'type' && i != 'title' && i != 'contentId' && i != 'thumbnail' && i != 'author' && i != 'duration') delete item[i];
+                        if(i != 'type' && i != 'title' && i != 'contentId' && i != 'thumbnail' && i != 'author' && i != 'duration' && i != 'timestamps') delete item[i];
                     }
                     items.push(item);
                 }
@@ -657,7 +662,7 @@ var discord = {
                 if(this.playing && !this.streamHealthCheckingPause){
                     let timestamp = await this.getCurrentPostion();
                     if(this.streamHealthLastTimestamp == timestamp){
-                        console.error('stream died -> restart from ', this.streamHealthLastTimestamp);
+                        console.log('stream died -> restart from ', this.streamHealthLastTimestamp);
                         // stream died -> restart from last timestamp
                         await this.destroyDispatcher();
                         this.play(this.streamHealthLastTimestamp);
@@ -726,7 +731,7 @@ var discord = {
                 // postion in seconds
                 await this.onready;
                 if(this.currentQueue.songs.length === 0 || !(await this.getVoiceConnection())){
-                    console.error('unable to play (no songs or no voice connection)', this.currentQueue.songs.length, await this.getVoiceConnection());
+                    console.log('unable to play (no songs or no voice connection)', this.currentQueue.songs.length, await this.getVoiceConnection());
                     return false; // unable to play (no songs or no voice connection)
                 }
                 if(await this.getDispatcher()) return await this.resume(); // if already playing nothing to do
@@ -1080,7 +1085,7 @@ ${text}<br><br><br>
 Original discord message: <a href="${url}">${url}</a>`
             }, function(err, info) {
             if (err) {
-              console.error('Error while sending email', user.notifications.email, err);
+              console.log('Error while sending email', user.notifications.email, err);
             }
         });
     },
@@ -1095,9 +1100,9 @@ Original discord message: <a href="${url}">${url}</a>`
             user = await discord.server.guild.members.fetch(user._id);
         }
         catch(e){
-            return console.error('Error while looking for user when sending announcement, id: ', user._id, ', error: ', e);
+            return console.log('Error while looking for user when sending announcement, id: ', user._id, ', error: ', e);
         }
-        if(!user) return console.error('User not found when sending announcement');
+        if(!user) return console.log('User not found when sending announcement');
         user.send('P&P Announcement:\n' + text + '\n\nOriginal message: ' + url);
     },
 
@@ -1591,7 +1596,7 @@ discord.client.login(config.discord.botToken).then(() => {
     let guild = discord.client.guilds.resolve(config.discord.guildId);
     if(!guild) throw new Error('guild not found');
     discord.server.init(guild);
-}).catch(err => console.error('Error when connecting to Discord: '+err.message));
+}).catch(err => console.log('Error when connecting to Discord: '+err.message));
 
 let raisedHandUsers = new Map();
 let diceCollection = new Map();
@@ -1771,7 +1776,7 @@ io.on('connection', async (socket) => {
                 else user.name = member.user.username;
             }
             catch(e){
-                console.error('Error while looking for user when serving it, id: ', user._id, ', error: ', e);
+                console.log('Error while looking for user when serving it, id: ', user._id, ', error: ', e);
             }
             socket.emit('serveDiscordUser',user);
         });
@@ -1906,6 +1911,63 @@ io.on('connection', async (socket) => {
 
         socket.on('buttonPressed', function(id){
             socket.broadcast.emit('buttonPressed_'+id);
+        });
+
+
+        socket.on('transferItem', async function(amount, fromId, toId, playerId){
+            function error(msg){
+                socket.emit('err',`transferItem(amount:${amount}, fromId:${fromId}, toId:${toId}, playerId:${playerId}): ${msg}`);
+            }
+            if(!mongodb) return error('database inactive');
+
+            if(toId != 'none' && !Number.isInteger(toId)) return error('invalid target id');
+
+            let currentAmount = (await mongodb.collection('ItemEntity').findOne({_id: fromId}, {projection:{_id:0,amount:1}}))?.amount;
+            if(currentAmount == undefined) return error('origin item not found');
+            if(currentAmount < amount) return error('amount to be transfered is greater than current amount');
+
+            let newAmount = (await mongodb.collection('ItemEntity').findOneAndUpdate(
+                {_id: fromId}, 
+                {$inc: {amount: -amount}}, 
+                {returnOriginal:false, projection:{_id:0,amount:1}}
+            )).value.amount;
+            
+
+            if(toId == 'none'){
+                if(await addData('ItemEntity', {amount}, {
+                    loose: true,
+                    parentId: playerId,
+                    playerId: playerId,
+                    template: fromId,
+                    templateMask: {amount: false},
+                    templateMaskDefault: true
+                }) == undefined){
+                    await mongodb.collection('ItemEntity').updateOne(
+                        {_id: fromId}, 
+                        {$inc: {amount: amount}}
+                    );
+                    return;
+                }
+            }
+            else{
+                let newTargetAmount = (await mongodb.collection('ItemEntity').findOneAndUpdate(
+                    {_id: toId}, 
+                    {$inc: {amount: amount}}, 
+                    {returnOriginal:false, projection:{_id:0,amount:1}}
+                ))?.value?.amount;
+
+                if(newTargetAmount == undefined){
+                    await mongodb.collection('ItemEntity').updateOne(
+                        {_id: fromId}, 
+                        {$inc: {amount: amount}}
+                    );
+                    return error('target item not found');
+                }
+
+                io.emit('updateData_ItemEntity_'+toId, {amount: newTargetAmount});
+            }
+
+            io.emit('updateData_ItemEntity_'+fromId, {amount: newAmount});
         });
         
 
